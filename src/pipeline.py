@@ -1,6 +1,11 @@
 """
 Main pipeline: run the full two-tier cascade over a batch of queries,
 logging every decision for later evaluation.
+
+Tier 1 now returns a real answer (not an intent label) with confidence
+computed from actual token log-probabilities -- see tier1.py's
+compute_confidence(). The escalation logic itself is unchanged: below
+the router's threshold, Tier 2 (Claude) is called instead.
 """
 import time
 from datetime import datetime
@@ -30,8 +35,8 @@ def run_pipeline(queries: list, business_unit: str = "payments", log_path: str =
         print(f"Start Time     : {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"Business Unit  : {t1_result['business_unit']} ({t1_result['assistant_name']})")
         print(f"Query          : {query}")
-        print(f"Result         : {t1_result['intent']}")
-        print(f"Confidence     : {t1_result['confidence_score']} ({t1_result['confidence_label']})")
+        print(f"Tier 1 Answer  : {t1_result['answer'][:100]}{'...' if len(t1_result['answer']) > 100 else ''}")
+        print(f"Confidence     : {t1_result['confidence_score']:.4f} ({t1_result['confidence_label']})")
         print(f"Decision       : {decision}")
         print("-" * 60)
 
@@ -40,7 +45,7 @@ def run_pipeline(queries: list, business_unit: str = "payments", log_path: str =
             "assistant_name": t1_result["assistant_name"],
             "tier1_model": t1_result["model"],
             "query": query,
-            "tier1_intent": t1_result["intent"],
+            "tier1_answer": t1_result["answer"],
             "tier1_confidence": t1_result["confidence_score"],
             "decision": decision,
             "tier1_latency_ms": round(tier1_latency_ms, 1),
@@ -48,7 +53,7 @@ def run_pipeline(queries: list, business_unit: str = "payments", log_path: str =
             "tier2_input_tokens": None,
             "tier2_output_tokens": None,
             "estimated_cost_usd": 0.0,
-            "final_answer": t1_result["intent"],
+            "final_answer": t1_result["answer"],
         }
 
         if decision == "ESCALATE":

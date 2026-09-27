@@ -16,19 +16,19 @@ Part of the src/ package -- run from the project root with:
 """
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-DEFAULT_MODEL = "phi3:mini"
+DEFAULT_MODEL = "payment-assistant"
 DEFAULT_BUSINESS_UNIT = "payments"
 
 BUSINESS_UNITS = {
     "payments": {
-        "model": "phi3:mini",
+        "model": "payment-assistant",
         "assistant_name": "Payment Assistant",
-        "description": "3.8B params, MIT license",
-    },
+        "description": "Fine-tuned Phi-3-mini on Bitext payments data",
+        },
     "retail_bank": {
-        "model": "qwen2.5:1.5b",
+        "model": "retail-bank-assistant",
         "assistant_name": "Retail Bank Assistant",
-        "description": "1.5B params, Apache 2.0 license",
+        "description": "Fine-tuned Qwen2.5-1.5B on Bitext retail banking data",
     },
 }
 

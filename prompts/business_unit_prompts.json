@@ -1,0 +1,8 @@
+{
+  "payments": {
+    "additional_instructions": "Keep answers focused on card payments, transfers, declined transactions, and fees. If the query is outside this scope, say so directly rather than guessing."
+  },
+  "retail_bank": {
+    "additional_instructions": "Keep answers focused on account opening, savings products, balances, and branch services. If the query is outside this scope, say so directly rather than guessing."
+  }
+}
