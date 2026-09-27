@@ -1,0 +1,70 @@
+Let's get you into Colab and cloned in, step by step.
+
+## Step 1: Open a new Colab notebook with GPU enabled
+
+Go to **colab.research.google.com** → **New notebook**
+
+Then: **Runtime → Change runtime type → T4 GPU → Save**
+
+## Step 2: Store your GitHub token as a Colab Secret (not in a cell)
+
+This matters — same lesson as the Anthropic key incident, applied here proactively so it doesn't happen again.
+
+1. Click the **key icon** in the left sidebar (Secrets)
+2. Click **Add new secret**
+3. Name: `GITHUB_TOKEN`
+4. Value: paste your GitHub Personal Access Token
+5. Toggle **Notebook access** ON
+
+**If you don't have a GitHub token yet** (different from your Anthropic one):
+1. GitHub → profile picture → **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)**
+2. **Generate new token (classic)** → name it `colab-two-tier-system` → check the **repo** scope → **Generate**
+3. Copy it immediately, then go paste it into the Colab Secret from step above — don't paste it into a notebook cell directly
+
+## Step 3: Clone your repo (first code cell)
+
+```python
+from google.colab import userdata
+token = userdata.get('GITHUB_TOKEN')
+
+!git clone https://{token}@github.com/YOUR_USERNAME/two-tier-system.git
+%cd two-tier-system
+```
+
+Replace `YOUR_USERNAME` with your actual GitHub username. Run this cell (Shift+Enter).
+
+**Expected output:** a `Cloning into 'two-tier-system'...` message ending in something like `Resolving deltas: 100%` — confirms the clone worked.
+
+## Step 4: Verify you're actually in the right place
+
+```python
+!ls
+```
+
+You should see `src`, `scripts`, `training`, `prompts`, `requirements.txt`, `README.md` — your actual project structure, not an empty folder.
+
+## Step 5: Install training dependencies
+
+```python
+!pip install -r training/requirements.txt
+```
+
+This installs `unsloth`, `torch`, `trl`, `transformers`, `datasets` — will take a couple of minutes, expect a fair amount of scrolling output, that's normal.
+
+## Step 6: Regenerate your training data fresh in Colab
+
+```python
+!python scripts/fetch_bitext_banking.py
+```
+
+**Expected output:**
+```
+Downloading Bitext retail-banking dataset...
+Loaded 25545 total records
+Saved data/raw/bitext_payments.jsonl and data/raw/bitext_payments.csv (~11000 rows)
+Saved data/raw/bitext_retail_bank.jsonl and data/raw/bitext_retail_bank.csv (~15000 rows)
+```
+
+---
+
+**Stop here and paste me the output of Steps 3 and 6** before moving to actual training — those are the two steps most likely to hit something unexpected (auth issues on the clone, or a genuine network/dataset issue on the fetch), and I'd rather catch a problem now than after you've kicked off a 30-60 minute training run.
