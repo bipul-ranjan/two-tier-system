@@ -1,81 +1,93 @@
-# Two-Tier System
+# scripts/
 
-Distributed in-house SLM (per business unit) with a single shared
-escalation LLM, for cost optimisation, security hardening, and reduced
-latency.
+One-off setup and data-preparation scripts -- things you run once (or
+occasionally), as opposed to `src/`, which is the actual pipeline that
+runs every time you do research work.
 
-## Project Structure
+## Why these are separate from src/
 
-```
-two-tier-system/
-├── src/                    All pipeline code — a proper Python package
-│   ├── __init__.py
-│   ├── config.py           Business-unit → model mapping
-│   ├── tier1.py             Tier 1 SLM (Ollama) classification + confidence
-│   ├── router.py            Confidence-threshold routing decision
-│   ├── tier2_escalate.py    Tier 2 LLM API call + cost estimation
-│   ├── pipeline.py          Runs the full cascade over a batch of queries
-│   └── evaluate.py          Computes metrics, writes results tables + plots
-├── data/
-│   └── raw/                 Downloaded datasets (banking77_test.csv, etc.)
-├── results/
-│   ├── logs/                 Per-query run logs (results_log_*.csv)
-│   ├── tables/                Summary metrics (summary_metrics.csv, etc.)
-│   └── plots/                  Generated charts (tradeoff_curve.png)
-├── tests/
-│   └── test_router.py         Unit tests for the routing logic
-├── venv/                      Virtual environment (not tracked by Git)
-├── requirements.txt
-├── .gitignore
-└── README.md
-```
-
-## Setup
+`src/` is a *package* -- its files import from each other (`from .tier1
+import ask_tier1`), which is why they need `python -m src.pipeline` to
+run correctly. The scripts in this folder don't import from each other
+or from `src/` -- they only use external libraries (`datasets`, `git`
+via `subprocess`, `pandas`). Because of that, they're run directly, the
+simpler way, with no `-m` and no `__init__.py` needed:
 
 ```
-python -m venv venv
-venv\Scripts\activate          # Windows
-pip install -r requirements.txt
-ollama pull phi3:mini
-ollama pull qwen2.5:1.5b
+python scripts/fetch_data.py
 ```
 
-Set your Tier 2 API key:
-```
-setx OPENAI_API_KEY "your-key-here"
-```
-(Close and reopen your terminal after `setx` — it only applies to new sessions.)
+If you're unsure why that distinction matters, see `src/README.md` --
+same underlying concept, just the version that happens to need the
+extra step.
 
-## Getting the dataset
+## The three scripts, in the order you'd normally run them
 
-```
-python -c "from datasets import load_dataset; ds = load_dataset('PolyAI/banking77'); ds['test'].to_pandas().to_csv('data/raw/banking77_test.csv', index=False)"
-```
+### 1. fetch_data.py
 
-## Running
+Downloads the datasets used to test the two-tier cascade itself:
 
-Everything is run as a module from the project root — not by `cd`-ing into `src/`:
+- **Banking77** (via the `mteb/banking77` mirror on Hugging Face) → `data/raw/banking77_train.csv`, `data/raw/banking77_test.csv`
+- **FinQA** (via `git clone`) → `FinQA/dataset/train.json`, `dev.json`, `test.json`
 
 ```
-python -m src.config       # sanity check: prints business unit → model mapping
-python -m src.tier1        # sanity check: one test query to Phi-3-mini
-python -m src.router       # sanity check: routing decisions at 5 confidence levels
-python -m src.pipeline     # runs the full cascade for both business units
-python -m src.evaluate     # computes summary + per-business-unit metrics
+python scripts/fetch_data.py
 ```
 
-## Running tests
+Note: uses the `mteb/banking77` mirror rather than the original
+`PolyAI/banking77` repo -- the original currently fails with `Dataset
+scripts are no longer supported`, since its repo uses a legacy loading
+script format Hugging Face's `datasets` library (v4.0+) no longer runs
+for security reasons. `mteb/banking77` is the same underlying data
+(confirmed: same 3,080-example test split, same 77 labels), hosted
+natively in modern Parquet format.
+
+### 2. convert_finqa_to_csv.py
+
+FinQA's raw files are deeply nested JSON (`pre_text`, `post_text`,
+`table`, and a `qa` sub-object). This flattens each record into one CSV
+row, so it can be loaded and filtered the same way as everything else
+in `data/raw/`:
 
 ```
-pip install pytest
-pytest tests/
+python scripts/convert_finqa_to_csv.py
 ```
 
-## Output
+Produces `data/raw/finqa_train.csv`, `finqa_dev.csv`, `finqa_test.csv`.
+Requires `FinQA/dataset/` to already exist -- run `fetch_data.py` first.
+The `table` and `gold_inds` columns are stored as JSON strings inside
+the CSV (so nested structure survives), and deserialize back cleanly
+with `json.loads()` if you need the original structure later.
 
-After running `pipeline.py` and `evaluate.py`, you'll have:
-- `results/logs/results_log_payments.csv`, `results_log_retail_bank.csv`, `results_log_combined.csv`
-- `results/tables/summary_metrics.csv`, `business_unit_metrics.csv`
-- `results/plots/tradeoff_curve.png` (if you call `plot_tradeoff()` with your own threshold sweep)
+### 3. fetch_bitext_banking.py
 
-These are exactly the files the live dashboard (separate `live-dashboard/` project) reads from — point its `TOPIC1_RESULTS_DIR` environment variable at this project's `results/tables` folder.
+Downloads the Bitext retail-banking chatbot dataset (25,545 real
+instruction/response pairs) and splits it by category into your two
+business units -- this is the training data for `training/train_payments.py`
+and `training/train_retail.py`, not for the main cascade pipeline:
+
+```
+python scripts/fetch_bitext_banking.py
+```
+
+Produces, in both JSONL and CSV:
+- `data/raw/bitext_payments.jsonl` / `.csv` (CARD, TRANSFER, ATM, FEES categories)
+- `data/raw/bitext_retail_bank.jsonl` / `.csv` (ACCOUNT, LOAN, PASSWORD, CONTACT, FIND categories)
+
+License: CDLA-Sharing 1.0 -- free to use, requires attribution, and any
+derivative data you share must stay under the same license. Cite:
+Bitext Innovations, "Bitext-retail-banking-llm-chatbot-training-dataset", 2024.
+
+## All three are safe to re-run
+
+Each script checks whether its output already exists before doing any
+work, and skips with a message rather than re-downloading or
+overwriting. Running any of them twice by mistake costs nothing.
+
+## Adding your own utility scripts later
+
+If you find yourself typing the same multi-step terminal commands
+repeatedly for something else, that's the signal to write a script and
+drop it in here rather than continuing to type it by hand -- same
+reasoning as all three scripts above: reproducible, reviewable in Git,
+and doesn't rely on you remembering the exact steps next time.

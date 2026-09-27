@@ -1,17 +1,14 @@
 """
 Main pipeline: run the full two-tier cascade over a batch of queries,
 logging every decision for later evaluation.
-
-Part of the src/ package — run from the project root with:
-    python -m src.pipeline
 """
 import time
+from datetime import datetime
 import pandas as pd
 
 from .tier1 import ask_tier1
 from .router import route
 from .tier2_escalate import ask_tier2, estimate_cost
-from .config import get_model_for_unit
 
 DATA_DIR = "data/raw"
 LOGS_DIR = "results/logs"
@@ -21,18 +18,27 @@ def run_pipeline(queries: list, business_unit: str = "payments", log_path: str =
     if log_path is None:
         log_path = f"{LOGS_DIR}/results_log_{business_unit}.csv"
 
-    tier1_model = get_model_for_unit(business_unit)
     rows = []
     for query in queries:
+        start_time = datetime.now()
         start = time.time()
-        t1_result = ask_tier1(query, model=tier1_model)
+        t1_result = ask_tier1(query, business_unit=business_unit)
         tier1_latency_ms = (time.time() - start) * 1000
 
         decision = route(t1_result["confidence_score"])
 
+        print(f"Start Time     : {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"Business Unit  : {t1_result['business_unit']} ({t1_result['assistant_name']})")
+        print(f"Query          : {query}")
+        print(f"Result         : {t1_result['intent']}")
+        print(f"Confidence     : {t1_result['confidence_score']} ({t1_result['confidence_label']})")
+        print(f"Decision       : {decision}")
+        print("-" * 60)
+
         row = {
             "business_unit": business_unit,
-            "tier1_model": tier1_model,
+            "assistant_name": t1_result["assistant_name"],
+            "tier1_model": t1_result["model"],
             "query": query,
             "tier1_intent": t1_result["intent"],
             "tier1_confidence": t1_result["confidence_score"],
@@ -56,7 +62,6 @@ def run_pipeline(queries: list, business_unit: str = "payments", log_path: str =
             row["final_answer"] = t2_result["answer"]
 
         rows.append(row)
-        print(f"[{business_unit}/{tier1_model}] [{decision}] {query[:50]}... (confidence={t1_result['confidence_score']})")
 
     df = pd.DataFrame(rows)
     df.to_csv(log_path, index=False)
@@ -66,7 +71,7 @@ def run_pipeline(queries: list, business_unit: str = "payments", log_path: str =
 
 def run_all_business_units(queries_by_unit: dict, log_path: str = None) -> pd.DataFrame:
     """Run the pipeline separately for each business unit and combine into
-    one log file — e.g. queries_by_unit = {"payments": [...], "retail_bank": [...]}
+    one log file -- e.g. queries_by_unit = {"payments": [...], "retail_bank": [...]}
     """
     if log_path is None:
         log_path = f"{LOGS_DIR}/results_log_combined.csv"
@@ -82,12 +87,10 @@ def run_all_business_units(queries_by_unit: dict, log_path: str = None) -> pd.Da
 
 
 if __name__ == "__main__":
-    all_queries = pd.read_csv(f"{DATA_DIR}/banking77_test.csv").sample(100, random_state=42)["text"].tolist()
-    # Split the sample across both business units to exercise both models
+    all_queries = pd.read_csv(f"{DATA_DIR}/banking77_train.csv").sample(100, random_state=42)["text"].tolist()
     half = len(all_queries) // 2
     queries_by_unit = {
         "payments": all_queries[:half],
         "retail_bank": all_queries[half:],
     }
     run_all_business_units(queries_by_unit)
-
