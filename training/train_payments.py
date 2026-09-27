@@ -2,9 +2,21 @@
 Fine-tunes Phi-3-mini into the Payment Assistant, using the payments
 split of the Bitext retail-banking dataset (see scripts/fetch_bitext_banking.py).
 
-Run this on a Colab GPU runtime (T4 is sufficient for this model size),
-after cloning this repo -- see training/README.md for the full sequence.
-Do NOT run this on your local machine -- it requires a GPU.
+Run this on a Colab GPU runtime (T4/L4 is sufficient for this model
+size), after cloning this repo -- see training/README.md for the full
+sequence. Do NOT run this on your local machine -- it requires a GPU.
+
+IMPORTANT: the final GGUF file is saved directly to Google Drive (see
+MODEL_OUTPUT_DIR below), not to Colab's local /content disk. Local disk
+is wiped every time the VM is recycled -- on a full disconnect, a
+session timeout, AND on switching GPU type (e.g. T4 -> L4), which
+allocates an entirely new machine. Saving straight to Drive means the
+trained model survives all of these, without a manual download step
+racing against a disconnect.
+
+Mount Drive before running this script:
+    from google.colab import drive
+    drive.mount('/content/drive')
 
     python training/train_payments.py
 """
@@ -16,16 +28,35 @@ from transformers import TrainingArguments
 from train_config import LORA_CONFIG, TRAINING_ARGS, load_and_format_dataset
 
 DATA_FILE = "data/raw/bitext_payments.jsonl"
-OUTPUT_DIR = "training/outputs/payments_checkpoints"
-GGUF_NAME = "training/outputs/payment_assistant"
+
+# Saved to Drive, not local /content -- survives disconnects, timeouts,
+# and GPU-type switches. Change this path if your Drive layout differs.
+MODEL_OUTPUT_DIR = "/content/drive/MyDrive/two-tier-system-models"
+GGUF_NAME = f"{MODEL_OUTPUT_DIR}/payment_assistant"
+
+# Local checkpoints during training are disposable (only matter if
+# training crashes partway through) -- kept on fast local disk rather
+# than Drive, to avoid slowing down every training step with Drive I/O.
+LOCAL_CHECKPOINT_DIR = "training/outputs/payments_checkpoints"
 
 
 def main():
+    if not os.path.exists("/content/drive/MyDrive"):
+        raise RuntimeError(
+            "Google Drive is not mounted. Run this first, in its own cell:\n"
+            "  from google.colab import drive\n"
+            "  drive.mount('/content/drive')\n"
+            "Then re-run this script -- without this, your trained model "
+            "would only exist on Colab's temporary local disk."
+        )
+
     if not os.path.exists(DATA_FILE):
         raise FileNotFoundError(
             f"{DATA_FILE} not found. Run scripts/fetch_bitext_banking.py first "
             f"(from the project root) to regenerate the training data."
         )
+
+    os.makedirs(MODEL_OUTPUT_DIR, exist_ok=True)
 
     print("Loading Phi-3-mini (4-bit) and attaching LoRA adapters...")
     model, tokenizer = FastLanguageModel.from_pretrained(
@@ -46,17 +77,18 @@ def main():
         train_dataset=dataset,
         dataset_text_field="text",
         max_seq_length=1024,
-        args=TrainingArguments(output_dir=OUTPUT_DIR, **TRAINING_ARGS),
+        args=TrainingArguments(output_dir=LOCAL_CHECKPOINT_DIR, **TRAINING_ARGS),
     )
 
     print("Starting training...")
     trainer.train()
 
-    print(f"Exporting to GGUF at {GGUF_NAME}.gguf ...")
-    os.makedirs("training/outputs", exist_ok=True)
+    print(f"Exporting to GGUF at {GGUF_NAME}.gguf (on Google Drive)...")
     model.save_pretrained_gguf(GGUF_NAME, tokenizer, quantization_method="q4_k_m")
 
-    print(f"\nDone. Download {GGUF_NAME}.gguf from the Colab file browser.")
+    print(f"\nDone. {GGUF_NAME}.gguf is saved directly to your Google Drive --")
+    print("no manual download needed, and it will survive this Colab session ending.")
+    print("Find it in Drive under: two-tier-system-models/payment_assistant.gguf")
 
 
 if __name__ == "__main__":
