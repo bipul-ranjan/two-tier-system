@@ -31,7 +31,7 @@ from train_config import LORA_CONFIG, TRAINING_ARGS, load_and_format_dataset
 
 DATA_FILE = "data/raw/bitext_retail_bank.jsonl"
 
-MODEL_OUTPUT_DIR = "/content/drive/MyDrive/two-tier-system-models"
+MODEL_OUTPUT_DIR = "/content/drive/MyDrive/LJMU_Research/two-tier-system-models"
 GGUF_NAME = f"{MODEL_OUTPUT_DIR}/retail_bank_assistant"
 
 LOCAL_CHECKPOINT_DIR = "training/outputs/retail_checkpoints"
@@ -85,7 +85,7 @@ def main():
 
     print(f"\nDone. {GGUF_NAME}.gguf is saved directly to your Google Drive --")
     print("no manual download needed, and it will survive this Colab session ending.")
-    print("Find it in Drive under: two-tier-system-models/retail_bank_assistant.gguf")
+    print("Find it in Drive under: LJMU_Research/two-tier-system-models/retail_bank_assistant.gguf")
 
 
 if __name__ == "__main__":

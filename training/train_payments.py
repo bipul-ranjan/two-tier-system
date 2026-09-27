@@ -31,7 +31,7 @@ DATA_FILE = "data/raw/bitext_payments.jsonl"
 
 # Saved to Drive, not local /content -- survives disconnects, timeouts,
 # and GPU-type switches. Change this path if your Drive layout differs.
-MODEL_OUTPUT_DIR = "/content/drive/MyDrive/two-tier-system-models"
+MODEL_OUTPUT_DIR = "/content/drive/MyDrive/LJMU_Research/two-tier-system-models"
 GGUF_NAME = f"{MODEL_OUTPUT_DIR}/payment_assistant"
 
 # Local checkpoints during training are disposable (only matter if
@@ -88,7 +88,7 @@ def main():
 
     print(f"\nDone. {GGUF_NAME}.gguf is saved directly to your Google Drive --")
     print("no manual download needed, and it will survive this Colab session ending.")
-    print("Find it in Drive under: two-tier-system-models/payment_assistant.gguf")
+    print("Find it in Drive under: LJMU_Research/two-tier-system-models/payment_assistant.gguf")
 
 
 if __name__ == "__main__":
