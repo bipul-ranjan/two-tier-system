@@ -22,6 +22,10 @@ cascade, and log every decision for later evaluation.
 - Models are preloaded before the first query, kept loaded for the whole run
   (KEEP_ALIVE), and unloaded when the run ends -- including on an error or
   Ctrl+C -- so model-load time never lands inside a query's latency.
+- Every run gets a run_id, run-<dd-mmm-yy>-<hh:mm AM/PM> (e.g. run-28-Sep-26-06:29 PM),
+  as the first column of every log. results_log_*.csv hold the LATEST run only (which is
+  what evaluate.py reads); every run is also appended to results/logs/results_history.csv,
+  so runs -- e.g. before and after retraining -- can be compared.
 
 Run from the project root:
     python -m src.pipeline          # default sample size
@@ -56,6 +60,8 @@ EXCEPTION_THRESHOLD = 0.7
 # themselves after this long.
 KEEP_ALIVE = "30m"
 
+HISTORY_PATH = f"{LOGS_DIR}/results_history.csv"
+
 PAYMENTS_CATEGORIES = {"CARD", "TRANSFER", "ATM", "FEES", "PAYMENT_EXCEPTION"}
 RETAIL_CATEGORIES = {"ACCOUNT", "LOAN", "PASSWORD", "CONTACT", "FIND", "RETAIL_EXCEPTION"}
 EXCEPTION_CATEGORIES = {"PAYMENT_EXCEPTION", "RETAIL_EXCEPTION"}
@@ -82,6 +88,37 @@ def load_random_sample(n: int = N_SAMPLES, seed=SEED) -> pd.DataFrame:
     sample["business_unit"] = sample["category"].map(unit_for_category)
     sample["is_exception"] = sample["category"].isin(EXCEPTION_CATEGORIES)
     return sample
+
+
+def make_run_id(existing_ids=(), now=None) -> str:
+    """run-<dd-mmm-yy>-<hh:mm AM/PM>. If that id is already taken (two runs inside the
+    same minute), a -2, -3 ... suffix keeps ids unique."""
+    base = (now or datetime.now()).strftime("run-%d-%b-%y-%I:%M %p")
+    if base not in existing_ids:
+        return base
+    n = 2
+    while f"{base}-{n}" in existing_ids:
+        n += 1
+    return f"{base}-{n}"
+
+
+def existing_run_ids() -> set:
+    if not os.path.exists(HISTORY_PATH):
+        return set()
+    try:
+        return set(pd.read_csv(HISTORY_PATH, usecols=["run_id"])["run_id"].dropna())
+    except ValueError:
+        return set()
+
+
+def guard_legacy_log() -> None:
+    """Refuse to overwrite an older results log that has no run_id, so its data is not lost."""
+    combined = f"{LOGS_DIR}/results_log_combined.csv"
+    if os.path.exists(combined) and "run_id" not in pd.read_csv(combined, nrows=0).columns:
+        raise RuntimeError(
+            f"{combined} has no run_id column and this run would overwrite it. "
+            f"Run `python scripts/backfill_run_id.py` first, so the existing results are kept."
+        )
 
 
 def load_models(models: list) -> None:
@@ -124,7 +161,7 @@ def unload_models(models: list) -> None:
             print(f"Warning: could not unload {m}: {e}")
 
 
-def process_query(query: str, business_unit: str, category: str, intent: str, is_exception: bool) -> dict:
+def process_query(query: str, business_unit: str, category: str, intent: str, is_exception: bool, run_id: str) -> dict:
     threshold = EXCEPTION_THRESHOLD if is_exception else NORMAL_THRESHOLD
 
     start_dt = datetime.now()
@@ -146,6 +183,7 @@ def process_query(query: str, business_unit: str, category: str, intent: str, is
     print(f"Decision       : {decision}")
 
     row = {
+        "run_id": run_id,
         "request_start_time": start_dt.isoformat(timespec="milliseconds"),
         "response_end_time": None,
         "business_unit": business_unit,
@@ -201,6 +239,9 @@ def run_pipeline(sample: pd.DataFrame, log_path: str = None) -> pd.DataFrame:
     if log_path is None:
         log_path = f"{LOGS_DIR}/results_log_combined.csv"
     os.makedirs(LOGS_DIR, exist_ok=True)
+    guard_legacy_log()
+    run_id = make_run_id(existing_run_ids())
+    print(f"Run ID: {run_id}")
 
     models = sorted({get_model_for_unit(u) for u in sample["business_unit"].unique()})
     try:
@@ -209,7 +250,7 @@ def run_pipeline(sample: pd.DataFrame, log_path: str = None) -> pd.DataFrame:
         warn_if_not_resident(models)
         print("-" * 60)
         rows = [
-            process_query(r.instruction, r.business_unit, r.category, r.intent, bool(r.is_exception))
+            process_query(r.instruction, r.business_unit, r.category, r.intent, bool(r.is_exception), run_id)
             for r in sample.itertuples(index=False)
         ]
     finally:
@@ -220,6 +261,10 @@ def run_pipeline(sample: pd.DataFrame, log_path: str = None) -> pd.DataFrame:
     df.to_csv(log_path, index=False)
     for unit, group in df.groupby("business_unit"):
         group.to_csv(f"{LOGS_DIR}/results_log_{unit}.csv", index=False)
+
+    history = pd.concat([pd.read_csv(HISTORY_PATH), df], ignore_index=True) if os.path.exists(HISTORY_PATH) else df
+    history.to_csv(HISTORY_PATH, index=False)
+    print(f"\nRun {run_id} appended to {HISTORY_PATH} ({history['run_id'].nunique()} run(s) in history)")
 
     print(f"\nSaved {len(df)} results to {log_path} (plus one log per business unit)")
     print("\nDecisions by scenario type:")
