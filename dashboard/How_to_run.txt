@@ -1,0 +1,24 @@
+The error comes from running the system Python (`Python314`) instead of your project's virtual environment. Your prompt has no `(venv)` in front of it, and that system Python doesn't have uvicorn.
+
+**1. Activate the venv** (the same way as before):
+```
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+.\venv\Scripts\Activate.ps1
+```
+Your prompt should now start with `(venv)`.
+
+**2. Install the dashboard's packages** (once):
+```
+python -m pip install -r dashboard\backend\requirements.txt
+```
+
+**3. Start the dashboard:**
+```
+python -m uvicorn dashboard.backend.main:app --port 8000
+```
+
+**4. Open http://localhost:8000** in your browser.
+
+If step 2 says it can't find `dashboard\backend\requirements.txt`, run `ls`. You should see `dashboard` sitting next to `src`. If it isn't there, the zip was unzipped into the wrong folder or one level too deep, so move `dashboard` up into the project root.
+
+If you get stuck, paste the error from whichever step fails.
