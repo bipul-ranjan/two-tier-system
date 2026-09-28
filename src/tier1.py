@@ -1,17 +1,23 @@
 """
 Tier 1: Local SLM generates a REAL answer (not just an intent label),
 with confidence computed from actual token log-probabilities returned
-by Ollama -- not a verbalized self-reported label. This is the token-
-logit confidence method described in the Coco paper (Li et al., CIKM
-2025) that this project cites as its closest prior work.
+by Ollama -- not a verbalized self-reported label.
+
+Two confidence methods are computed and returned side by side:
+- confidence_score_avg: geometric mean across all tokens (the Coco-paper
+  style method). Smooth, but diluted by common filler words ("I'm",
+  "sorry", "to", "hear") that the model is always confident about
+  regardless of whether it understood your actual question.
+- confidence_score_min: the single least-confident token in the whole
+  response. Sharper, more sensitive to one genuine moment of real
+  uncertainty, since it isn't averaged away by easy surrounding words.
+
+`confidence_score` (used by router.py for the actual routing decision)
+is currently set to the avg method, for consistency with what's been
+evaluated so far -- see scripts/compare_confidence_methods.py for how
+to test whether switching to min changes routing behaviour.
 
 Requires Ollama v0.12.11 or newer (for logprobs support in /api/generate).
-Check your version with: ollama --version
-
-Run `ollama pull phi3:mini` and `ollama pull qwen2.5:1.5b` once before
-using this module -- or, if you've fine-tuned, `payment-assistant` and
-`retail-bank-assistant` -- see config.py for which business unit uses
-which model.
 
 Part of the src/ package -- run from the project root with:
     python -m src.tier1
@@ -36,10 +42,6 @@ _PROMPTS_CACHE = None
 
 
 def load_business_unit_prompts() -> dict:
-    """Load the editable per-unit instructions file. Cached after first
-    load. Missing file/entries degrade gracefully -- this file is meant
-    for optional tuning, not a hard requirement.
-    """
     global _PROMPTS_CACHE
     if _PROMPTS_CACHE is not None:
         return _PROMPTS_CACHE
@@ -51,10 +53,9 @@ def load_business_unit_prompts() -> dict:
     return _PROMPTS_CACHE
 
 
-def ask_tier1(query: str, business_unit: str = DEFAULT_BUSINESS_UNIT) -> dict:
-    """Send a query to the local Tier 1 SLM for the given business unit,
-    get a real answer, and compute confidence from actual token
-    log-probabilities (not a self-reported label).
+def ask_tier1(query: str, business_unit: str = DEFAULT_BUSINESS_UNIT, keep_alive=None) -> dict:
+    """keep_alive (optional) is passed to Ollama so the model stays loaded after this
+    call -- e.g. "30m". Left out by default, so standalone calls behave as before.
     """
     unit_cfg = get_unit_config(business_unit)
     model = unit_cfg["model"]
@@ -69,62 +70,70 @@ def ask_tier1(query: str, business_unit: str = DEFAULT_BUSINESS_UNIT) -> dict:
         additional_instructions=additional_instructions,
     )
 
-    resp = requests.post(
-        OLLAMA_URL,
-        json={
-            "model": model,
-            "prompt": prompt,
-            "stream": False,
-            "logprobs": True,
-        },
-        timeout=60,
-    )
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "logprobs": True,
+    }
+    if keep_alive is not None:
+        payload["keep_alive"] = keep_alive
+
+    resp = requests.post(OLLAMA_URL, json=payload, timeout=60)
     resp.raise_for_status()
     data = resp.json()
 
     answer = data["response"].strip()
-    confidence_score = compute_confidence(data)
+    confidence_avg = compute_confidence_avg(data)
+    confidence_min = compute_confidence_min(data)
 
     return {
         "business_unit": business_unit,
         "assistant_name": assistant_name,
         "model": model,
         "answer": answer,
-        "confidence_score": confidence_score,
-        "confidence_label": confidence_to_label(confidence_score),
+        "confidence_score": confidence_avg,          # the one router.py actually uses
+        "confidence_score_avg": confidence_avg,
+        "confidence_score_min": confidence_min,
+        "confidence_label": confidence_to_label(confidence_avg),
+        # Ollama reports durations in nanoseconds. load_duration is the time
+        # spent loading the model into memory for this call -- near zero when
+        # the model is already loaded, several seconds on a cold start.
+        "ollama_load_ms": round(data.get("load_duration", 0) / 1e6, 1),
+        "ollama_output_tokens": data.get("eval_count"),
     }
 
 
-def compute_confidence(ollama_response: dict) -> float:
-    """Compute confidence as the geometric mean of per-token probabilities
-    across the actually-generated response -- i.e. exp(mean(logprob)).
-    This is equivalent to 1/perplexity: a response made of consistently
-    high-probability tokens scores close to 1.0; a response the model
-    was guessing its way through scores much lower.
-
-    Falls back to a neutral 0.5 if the Ollama server didn't return
-    logprobs (e.g. an older Ollama version, or a model/backend that
-    doesn't support it) -- this is a real limitation worth stating
-    explicitly in your dissertation's methodology section, not silently
-    hiding.
+def compute_confidence_avg(ollama_response: dict) -> float:
+    """Geometric mean of per-token probabilities across the whole
+    response -- exp(mean(logprob)). Equivalent to 1/perplexity.
     """
-    logprobs_data = ollama_response.get("logprobs")
-    if not logprobs_data:
-        return 0.5
-
-    token_logprobs = [entry["logprob"] for entry in logprobs_data if "logprob" in entry]
+    token_logprobs = _extract_token_logprobs(ollama_response)
     if not token_logprobs:
         return 0.5
-
     avg_logprob = sum(token_logprobs) / len(token_logprobs)
     return math.exp(avg_logprob)
 
 
-def confidence_to_label(score: float) -> str:
-    """Human-readable bucket, purely for logging/printing -- the actual
-    routing decision in router.py uses the numeric score directly, not
-    this label.
+def compute_confidence_min(ollama_response: dict) -> float:
+    """Probability of the single least-confident token in the response --
+    exp(min(logprob)). Sharper signal, less diluted by filler words.
     """
+    token_logprobs = _extract_token_logprobs(ollama_response)
+    if not token_logprobs:
+        return 0.5
+    return math.exp(min(token_logprobs))
+
+
+def _extract_token_logprobs(ollama_response: dict):
+    logprobs_data = ollama_response.get("logprobs")
+    if not logprobs_data:
+        return None
+    token_logprobs = [entry["logprob"] for entry in logprobs_data if "logprob" in entry]
+    return token_logprobs if token_logprobs else None
+
+
+def confidence_to_label(score: float) -> str:
     if score >= 0.8:
         return "very high"
     elif score >= 0.6:
@@ -150,6 +159,7 @@ if __name__ == "__main__":
     print(f"Business Unit  : {result['business_unit']} ({result['assistant_name']})")
     print(f"Query          : {test_query}")
     print(f"Answer         : {result['answer']}")
-    print(f"Confidence     : {result['confidence_score']:.4f} ({result['confidence_label']})")
+    print(f"Confidence AVG : {result['confidence_score_avg']:.4f}")
+    print(f"Confidence MIN : {result['confidence_score_min']:.4f}")
     print(f"Elapsed        : {elapsed_time:.2f} seconds")
     print("-" * 60)
