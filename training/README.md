@@ -10,7 +10,7 @@ folder rather than mixed into `src/`.
 
 | File | Purpose |
 |---|---|
-| `train_config.py` | Shared LoRA/training settings and the dataset-formatting function both scripts use |
+| `train_config.py` | Shared LoRA/training settings and the dataset-formatting function both scripts use -- currently `r=32, lora_alpha=32, num_train_epochs=5, learning_rate=1.5e-4` for both models (raised from `r=16, lora_alpha=16, num_train_epochs=3, learning_rate=2e-4`; see note below) |
 | `train_payments.py` | Fine-tunes Phi-3-mini on `data/raw/bitext_payments.jsonl` |
 | `train_retail.py` | Fine-tunes Qwen2.5-1.5B on `data/raw/bitext_retail_bank.jsonl` + `data/raw/retail_exception_synthetic.jsonl` |
 | `requirements.txt` | Training-only dependencies (unsloth, trl, etc.) — separate from the main project's `requirements.txt` since these are GPU-specific and not needed for day-to-day pipeline runs |
@@ -42,6 +42,12 @@ token = userdata.get('GITHUB_TOKEN')
 ```python
 !pip install -r training/requirements.txt
 ```
+
+#### Note on hyperparameters and what they confound
+
+`train_config.py`'s `LORA_CONFIG`/`TRAINING_ARGS` were raised (rank/alpha 16→32, epochs 3→5, learning rate 2e-4→1.5e-4) for both models in the same change that added retail's synthetic exception data. That means: **payments' retrain result isolates the hyperparameter effect alone** (its training data did not change), while **retail's retrain result reflects the hyperparameter change and the new data together** (both changed at once). Worth stating plainly in your methodology section, since retail's confidence shift after this retrain cannot be attributed to one cause or the other from this run alone -- a follow-up run holding one of the two fixed would be needed to separate them.
+
+Also worth noting for planning: 5 epochs at rank 32 will take longer per model than the original 3-epoch, rank-16 setup -- budget extra Colab session time accordingly, and keep an eye on the T4's session limits if you're on the free tier.
 
 ### 5. Regenerate the training data
 

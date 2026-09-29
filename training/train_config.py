@@ -2,7 +2,7 @@
 Shared configuration and helpers for both training scripts. Keeping this
 separate means train_payments.py and train_retail.py only differ in the
 three lines that are genuinely different (base model, data file, output
-name) -- everything else is defined once, here.
+name) -- everything else is defined once, here, and applies to both models.
 
 Part of the training/ package -- these scripts are meant to be run on a
 Colab GPU runtime after cloning this repo, not on your local machine.
@@ -10,10 +10,17 @@ Colab GPU runtime after cloning this repo, not on your local machine.
 import torch
 from datasets import load_dataset
 
+# r/lora_alpha raised from 16 to 32 (more adapter capacity) and num_train_epochs
+# raised from 3 to 5 (more passes over the data), with learning_rate lowered from
+# 2e-4 to 1.5e-4 to keep convergence stable with the extra epochs and capacity.
+# Applies to BOTH models -- payments' training data is unchanged, so if its
+# confidence shifts after retraining, that isolates the effect of this change
+# specifically (retail's data changed too in the same retrain, so its result
+# reflects both changes together, not this one alone).
 LORA_CONFIG = dict(
-    r=16,
+    r=32,
     target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-    lora_alpha=16,
+    lora_alpha=32,
     lora_dropout=0,
     bias="none",
     use_gradient_checkpointing="unsloth",
@@ -24,8 +31,8 @@ TRAINING_ARGS = dict(
     per_device_train_batch_size=2,
     gradient_accumulation_steps=4,
     warmup_steps=10,
-    num_train_epochs=3,
-    learning_rate=2e-4,
+    num_train_epochs=5,
+    learning_rate=1.5e-4,
     fp16=not torch.cuda.is_bf16_supported(),
     bf16=torch.cuda.is_bf16_supported(),
     logging_steps=10,
