@@ -21,7 +21,8 @@ export function UnitTable({ rows }) {
             <th>Local model</th>
             <th className="num">Queries</th>
             <th>Answered locally</th>
-            <th className="num">Avg confidence</th>
+            <th className="num">Local conf</th>
+            <th className="num">Claude conf</th>
             <th className="num">Median time</th>
             <th className="num">Claude spend</th>
           </tr>
@@ -33,7 +34,8 @@ export function UnitTable({ rows }) {
               <td className="code">{r.model ?? "-"}</td>
               <td className="num">{r.rows}</td>
               <td><Meter pct={r.local_pct} /></td>
-              <td className="num">{fmtConf(r.avg_conf)}</td>
+              <td className="num">{fmtConf(r.avg_local_conf)}</td>
+              <td className="num">{r.claude_conf_known > 0 ? fmtConf(r.avg_claude_conf) : "-"}</td>
               <td className="num">{fmtMs(r.median_total_ms)}</td>
               <td className="num">{fmtUsd(r.tier2_cost_usd)}</td>
             </tr>
@@ -53,7 +55,8 @@ export function ScenarioTable({ rows }) {
             <th>Type of query</th>
             <th className="num">Queries</th>
             <th>Sent to Claude</th>
-            <th className="num">Avg confidence</th>
+            <th className="num">Local conf</th>
+            <th className="num">Claude conf</th>
           </tr>
         </thead>
         <tbody>
@@ -62,7 +65,8 @@ export function ScenarioTable({ rows }) {
               <td>{r.type}</td>
               <td className="num">{r.rows}</td>
               <td><Meter pct={r.escalated_pct} /></td>
-              <td className="num">{fmtConf(r.avg_conf)}</td>
+              <td className="num">{fmtConf(r.avg_local_conf)}</td>
+              <td className="num">{r.claude_conf_known > 0 ? fmtConf(r.avg_claude_conf) : "-"}</td>
             </tr>
           ))}
         </tbody>

@@ -4,6 +4,7 @@ LLM" in the architecture). Requires ANTHROPIC_API_KEY to be set as an
 environment variable. Install with: pip install anthropic
 """
 import os
+import re
 from anthropic import Anthropic
 
 client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
@@ -19,21 +20,49 @@ MODEL = "claude-haiku-4-5-20251001"
 PRICE_PER_1K_INPUT = 0.001
 PRICE_PER_1K_OUTPUT = 0.005
 
+# The Anthropic API does not return token-level log-probabilities the way
+# Ollama does for Tier 1, so there is no way to compute a Claude confidence
+# the same way. Instead, Claude is asked to self-report one on a final line,
+# which is parsed out here and never shown to the end user. This is a
+# self-assessment, not a measured probability -- treat it as a weaker,
+# differently-biased signal than the Tier 1 log-prob confidence, not a
+# like-for-like replacement.
+CONFIDENCE_INSTRUCTION = (
+    "\n\nAfter your answer, on its own final line, write exactly:\n"
+    "CONFIDENCE: <number>\n"
+    "where <number> is between 0.00 and 1.00 and reflects how confident you are "
+    "that your answer is accurate and complete. Write nothing after that line."
+)
+_CONFIDENCE_RE = re.compile(r"\n*CONFIDENCE:\s*([01](?:\.\d+)?)\s*$", re.IGNORECASE)
+
+
+def _split_confidence(text: str):
+    """Pull the trailing 'CONFIDENCE: 0.xx' line off Claude's answer.
+    Returns (answer_without_the_line, confidence_or_None)."""
+    m = _CONFIDENCE_RE.search(text)
+    if not m:
+        print("WARNING: tier2 response had no parseable CONFIDENCE line -- logging confidence as blank")
+        return text, None
+    confidence = max(0.0, min(1.0, float(m.group(1))))
+    return text[: m.start()].rstrip(), confidence
+
 
 def ask_tier2(query: str, context: str = "") -> dict:
-    """Send an escalated query to the Tier 2 LLM and return the answer + token usage."""
+    """Send an escalated query to the Tier 2 LLM and return the answer, its
+    self-reported confidence, and token usage."""
     user_content = f"{context}\n\nQuestion: {query}" if context else query
 
     response = client.messages.create(
         model=MODEL,
-        max_tokens=500,
-        system="You are a financial reasoning assistant. Answer precisely.",
+        max_tokens=520,
+        system="You are a financial reasoning assistant. Answer precisely." + CONFIDENCE_INSTRUCTION,
         messages=[{"role": "user", "content": user_content}],
     )
 
-    answer = response.content[0].text
+    answer, confidence = _split_confidence(response.content[0].text)
     return {
         "answer": answer,
+        "confidence": confidence,
         "input_tokens": response.usage.input_tokens,
         "output_tokens": response.usage.output_tokens,
     }
@@ -48,4 +77,6 @@ if __name__ == "__main__":
     result = ask_tier2("What was the year-over-year change in operating margin?")
     cost = estimate_cost(result["input_tokens"], result["output_tokens"])
     print(result["answer"])
+    print(f"Claude self-reported confidence: {result['confidence']}")
     print(f"Estimated cost: ${cost:.6f}")
+

@@ -32,9 +32,9 @@ TRAINING_ARGS = dict(
 )
 
 
-def load_and_format_dataset(jsonl_path: str, assistant_name: str):
-    """Load a Bitext-format JSONL file (instruction/response pairs) and
-    format it into the instruction-tuning text format SFTTrainer expects.
+def load_and_format_dataset(jsonl_path, assistant_name: str):
+    """Load one Bitext-format JSONL file, or a list of them (concatenated), and format
+    into the instruction-tuning text format SFTTrainer expects.
     """
     dataset = load_dataset("json", data_files=jsonl_path, split="train")
 

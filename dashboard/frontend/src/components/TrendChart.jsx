@@ -5,6 +5,8 @@ import { fmtConf, fmtMs, fmtPct, runLabel, runTick, unitLabel } from "../format"
 
 const METRICS = [
   { key: "avg_conf", label: "Average confidence", domain: [0, 1], fmt: fmtConf, tick: (v) => v.toFixed(1) },
+  { key: "avg_local_conf", label: "Local confidence", domain: [0, 1], fmt: fmtConf, tick: (v) => v.toFixed(1) },
+  { key: "avg_claude_conf", label: "Claude confidence", domain: [0, 1], fmt: fmtConf, tick: (v) => v.toFixed(1) },
   { key: "local_pct", label: "Answered locally", domain: [0, 100], fmt: (v) => fmtPct(v, 0), tick: (v) => `${v}%` },
   { key: "median_total_ms", label: "Median time per query", domain: [0, "auto"], fmt: fmtMs, tick: (v) => `${Math.round(v / 1000)} s` },
 ];
@@ -54,6 +56,9 @@ export default function TrendChart({ runs, selectedId }) {
       </div>
       {runs.length < 2 && (
         <p className="hint">There is only one run so far. Run the pipeline again, for example after retraining, to see a trend here.</p>
+      )}
+      {metric.key === "avg_claude_conf" && runs.every((r) => !r.overall.claude_conf_known) && (
+        <p className="hint">No run so far has a recorded Claude confidence. This needs the updated tier2_escalate.py, and only escalated queries get a value.</p>
       )}
     </div>
   );

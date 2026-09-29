@@ -7,9 +7,10 @@ cascade, and log every decision for later evaluation.
   PAYMENT_EXCEPTION -> payments; ACCOUNT/LOAN/PASSWORD/CONTACT/FIND/
   RETAIL_EXCEPTION -> retail_bank), so each query goes to the right
   assistant instead of an arbitrary split.
-- Every row currently uses one confidence threshold, 0.7: below 0.7 escalates
-  to Tier 2. Normal and exception rows have separate constants (NORMAL_THRESHOLD,
-  EXCEPTION_THRESHOLD) so they can be split again later by changing one number.
+- Threshold is set per business unit (and per normal/exception scenario within
+  it) via the THRESHOLDS dict below, since different Tier 1 models can have very
+  different confidence distributions -- a smaller fine-tuned model naturally
+  produces less confident answers even when its content is fine.
 - Both confidence methods (avg and min) are logged for every query; routing
   uses confidence_score (currently = the avg method) via router.route().
 - Latency is logged three ways per query, so it can be evaluated properly:
@@ -44,16 +45,38 @@ from .tier1 import ask_tier1
 from .router import route
 from .tier2_escalate import ask_tier2, estimate_cost
 
+# Whole-file exclusive locking so results_history.csv cannot be opened elsewhere
+# (Excel, a text editor) for the whole duration of a run -- not just checked once
+# at the start. msvcrt on Windows, flock on Mac/Linux.
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
+
 SYNTHETIC_DIR = "data/synthetic"
 LOGS_DIR = "results/logs"
 
 N_SAMPLES = 100
 SEED = None  # None = different random rows every run; set an int to reproduce a run
 
-# Escalate anything scoring below this. Two constants, so normal and exception
-# rows can be given different thresholds again later.
-NORMAL_THRESHOLD = 0.7
-EXCEPTION_THRESHOLD = 0.7
+# Escalate anything scoring below its threshold. Threshold is set per business unit,
+# and can be set separately for normal vs. exception rows within a unit -- edit the
+# values below to whatever your data supports. A unit not listed here, or a run whose
+# rows have no business_unit match, falls back to DEFAULT_THRESHOLD.
+THRESHOLDS = {
+    "payments": {"normal": 0.7, "exception": 0.7},
+    # 0.55 is a suggested starting point, not a measured optimum: it sits just above
+    # retail_bank's own mean/median confidence (0.529 / 0.527 in the latest run), the
+    # same relationship 0.7 already has to payments' mean (0.700). Re-tune from the
+    # Overview page once you have more runs at this setting.
+    "retail_bank": {"normal": 0.55, "exception": 0.55},
+}
+DEFAULT_THRESHOLD = 0.7
+
+
+def get_threshold(business_unit: str, is_exception: bool) -> float:
+    scenario = "exception" if is_exception else "normal"
+    return THRESHOLDS.get(business_unit, {}).get(scenario, DEFAULT_THRESHOLD)
 
 # How long Ollama keeps a model loaded after each request during a run. Finite on
 # purpose: if the script is killed hard (so it can't unload), the models still free
@@ -121,6 +144,113 @@ def guard_legacy_log() -> None:
         )
 
 
+def guard_writable(paths) -> None:
+    """Fail fast, before spending any time or Claude API cost, if a log file is open
+    elsewhere (e.g. Excel on Windows) and would refuse to be written to at the end
+    of the run. Only checks files that already exist -- a new file is always writable."""
+    for path in paths:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, "a"):
+                pass
+        except PermissionError as e:
+            raise RuntimeError(
+                f"Cannot write to {path} -- it looks like it's open in another program "
+                f"(Excel, a text editor, etc.). Close it there first, then re-run. ({e})"
+            ) from e
+
+
+# Sentinel byte-count used for msvcrt.locking(). Windows lets you lock a region larger
+# than the file's current size (it just has to be consistent between lock and unlock),
+# so one large fixed value safely covers the file at any size it might grow to.
+_WIN_LOCK_BYTES = 0x7FFFFFFF - 1
+
+
+class HistoryLock:
+    """Holds an exclusive OS-level lock on results_history.csv for an entire pipeline
+    run, so nothing else (Excel, a text editor, a second run of the pipeline) can open
+    it from the moment the run starts until it finishes and the file is updated --
+    not just at the final save step. Use as a context manager:
+
+        with HistoryLock(HISTORY_PATH) as lock:
+            ...run the whole pipeline...
+            lock.write(final_history_dataframe)
+
+    The lock is always released on the way out, including if the run raises partway
+    through, so a crash never leaves the file stuck locked.
+    """
+
+    def __init__(self, path: str):
+        self.path = path
+        self.file = None
+
+    def __enter__(self):
+        if not os.path.exists(self.path):
+            open(self.path, "a", encoding="utf-8").close()  # create it so it can be reopened in r+ mode
+        try:
+            # encoding="utf-8" matches pandas' own default for read_csv/to_csv when given a
+            # path directly. Without it, Python falls back to the OS's local codepage (cp1252
+            # on Windows), which cannot decode the UTF-8 bytes pandas itself writes -- that
+            # mismatch, not the file's actual content, is what caused the UnicodeDecodeError.
+            self.file = open(self.path, "r+", newline="", encoding="utf-8")
+        except PermissionError as e:
+            raise RuntimeError(
+                f"Cannot open {self.path} -- it looks like it's open in another program "
+                f"(Excel, a text editor, etc.). Close it there first, then re-run. ({e})"
+            ) from e
+        try:
+            self._lock()
+        except OSError as e:
+            self.file.close()
+            self.file = None
+            raise RuntimeError(
+                f"{self.path} is locked by another program (Excel, a text editor, or "
+                f"another run of the pipeline). Close it there first, then re-run. ({e})"
+            ) from e
+        return self
+
+    def _lock(self) -> None:
+        self.file.seek(0)
+        if sys.platform == "win32":
+            msvcrt.locking(self.file.fileno(), msvcrt.LK_NBLCK, _WIN_LOCK_BYTES)
+        else:
+            fcntl.flock(self.file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _unlock(self) -> None:
+        self.file.seek(0)
+        if sys.platform == "win32":
+            msvcrt.locking(self.file.fileno(), msvcrt.LK_UNLCK, _WIN_LOCK_BYTES)
+        else:
+            fcntl.flock(self.file.fileno(), fcntl.LOCK_UN)
+
+    def read(self) -> pd.DataFrame:
+        """Read the locked file's current contents through the same open handle."""
+        self.file.seek(0)
+        try:
+            return pd.read_csv(self.file)
+        except pd.errors.EmptyDataError:
+            return pd.DataFrame()
+
+    def write(self, df: pd.DataFrame) -> None:
+        """Overwrite the locked file's contents with df, through the same open handle --
+        never opens a second handle to the path, so it can't collide with the lock."""
+        self.file.seek(0)
+        self.file.truncate()
+        df.to_csv(self.file, index=False)
+        self.file.flush()
+        os.fsync(self.file.fileno())
+
+    def __exit__(self, exc_type, exc, tb):
+        if self.file is not None:
+            try:
+                self._unlock()
+            finally:
+                self.file.close()
+                self.file = None
+        return False
+
+
 def load_models(models: list) -> None:
     """Load each model into memory now (a generate request with no prompt just loads it)."""
     for m in models:
@@ -162,7 +292,7 @@ def unload_models(models: list) -> None:
 
 
 def process_query(query: str, business_unit: str, category: str, intent: str, is_exception: bool, run_id: str) -> dict:
-    threshold = EXCEPTION_THRESHOLD if is_exception else NORMAL_THRESHOLD
+    threshold = get_threshold(business_unit, is_exception)
 
     start_dt = datetime.now()
     t_query_start = time.perf_counter()
@@ -205,6 +335,7 @@ def process_query(query: str, business_unit: str, category: str, intent: str, is
         "tier1_output_tokens": t1_result.get("ollama_output_tokens"),
         "tier2_input_tokens": None,
         "tier2_output_tokens": None,
+        "tier2_confidence": None,
         "estimated_cost_usd": 0.0,
         "final_answer": t1_result["answer"],
     }
@@ -217,6 +348,7 @@ def process_query(query: str, business_unit: str, category: str, intent: str, is
         row["tier2_latency_ms"] = round(tier2_latency_ms, 1)
         row["tier2_input_tokens"] = t2_result["input_tokens"]
         row["tier2_output_tokens"] = t2_result["output_tokens"]
+        row["tier2_confidence"] = t2_result["confidence"]
         row["estimated_cost_usd"] = estimate_cost(t2_result["input_tokens"], t2_result["output_tokens"])
         row["final_answer"] = t2_result["answer"]
 
@@ -225,9 +357,10 @@ def process_query(query: str, business_unit: str, category: str, intent: str, is
     row["response_end_time"] = datetime.now().isoformat(timespec="milliseconds")
 
     tier2_text = f"{tier2_latency_ms:.0f} ms" if tier2_latency_ms is not None else "-"
+    tier2_conf_text = f" (Claude confidence {row['tier2_confidence']:.2f})" if row["tier2_confidence"] is not None else ""
     load_ms = row["tier1_load_ms"]
     load_text = f" (model load {load_ms:.0f} ms)" if load_ms else ""
-    print(f"Latency        : Tier1 {tier1_latency_ms:.0f} ms{load_text} | Tier2 {tier2_text} | Total {total_latency_ms:.0f} ms")
+    print(f"Latency        : Tier1 {tier1_latency_ms:.0f} ms{load_text} | Tier2 {tier2_text}{tier2_conf_text} | Total {total_latency_ms:.0f} ms")
     print("-" * 60)
     return row
 
@@ -240,31 +373,41 @@ def run_pipeline(sample: pd.DataFrame, log_path: str = None) -> pd.DataFrame:
         log_path = f"{LOGS_DIR}/results_log_combined.csv"
     os.makedirs(LOGS_DIR, exist_ok=True)
     guard_legacy_log()
+    unit_log_paths = [f"{LOGS_DIR}/results_log_{u}.csv" for u in sample["business_unit"].unique()]
+    guard_writable([log_path, *unit_log_paths])
     run_id = make_run_id(existing_run_ids())
     print(f"Run ID: {run_id}")
 
     models = sorted({get_model_for_unit(u) for u in sample["business_unit"].unique()})
-    try:
-        print("Preloading models...")
-        load_models(models)
-        warn_if_not_resident(models)
-        print("-" * 60)
-        rows = [
-            process_query(r.instruction, r.business_unit, r.category, r.intent, bool(r.is_exception), run_id)
-            for r in sample.itertuples(index=False)
-        ]
-    finally:
-        print("Unloading models...")
-        unload_models(models)
 
-    df = pd.DataFrame(rows)
-    df.to_csv(log_path, index=False)
-    for unit, group in df.groupby("business_unit"):
-        group.to_csv(f"{LOGS_DIR}/results_log_{unit}.csv", index=False)
+    # results_history.csv is locked for the whole run, from here until the run finishes
+    # and the file is updated -- not just checked once at the start. Nothing else (Excel,
+    # a text editor, a second run of the pipeline) can open it in the meantime.
+    with HistoryLock(HISTORY_PATH) as lock:
+        print(f"Locked {HISTORY_PATH} -- it can't be opened elsewhere until this run finishes.")
+        try:
+            print("Preloading models...")
+            load_models(models)
+            warn_if_not_resident(models)
+            print("-" * 60)
+            rows = [
+                process_query(r.instruction, r.business_unit, r.category, r.intent, bool(r.is_exception), run_id)
+                for r in sample.itertuples(index=False)
+            ]
+        finally:
+            print("Unloading models...")
+            unload_models(models)
 
-    history = pd.concat([pd.read_csv(HISTORY_PATH), df], ignore_index=True) if os.path.exists(HISTORY_PATH) else df
-    history.to_csv(HISTORY_PATH, index=False)
-    print(f"\nRun {run_id} appended to {HISTORY_PATH} ({history['run_id'].nunique()} run(s) in history)")
+        df = pd.DataFrame(rows)
+        df.to_csv(log_path, index=False)
+        for unit, group in df.groupby("business_unit"):
+            group.to_csv(f"{LOGS_DIR}/results_log_{unit}.csv", index=False)
+
+        existing_history = lock.read()
+        history = pd.concat([existing_history, df], ignore_index=True) if not existing_history.empty else df
+        lock.write(history)
+        print(f"\nRun {run_id} appended to {HISTORY_PATH} ({history['run_id'].nunique()} run(s) in history)")
+    print(f"Released lock on {HISTORY_PATH}.")
 
     print(f"\nSaved {len(df)} results to {log_path} (plus one log per business unit)")
     print("\nDecisions by scenario type:")

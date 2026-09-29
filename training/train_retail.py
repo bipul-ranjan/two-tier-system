@@ -1,7 +1,12 @@
 """
 Fine-tunes Qwen2.5-1.5B into the Retail Bank Assistant, using the
 retail_bank split of the Bitext retail-banking dataset (see
-scripts/fetch_bitext_banking.py).
+scripts/fetch_bitext_banking.py) PLUS synthetic exception-scenario examples
+(see scripts/generate_exception_training_data.py) -- the real Bitext data
+has no fraud/hardship/vulnerable-customer category at all, so without this
+second file the model never saw anything like those scenarios during
+training. That gap was the main driver behind RETAIL_EXCEPTION scoring the
+lowest confidence of any category in pipeline runs.
 
 Run this on a Colab GPU runtime, after cloning this repo, in a FRESH
 runtime (Runtime -> Restart runtime, or after switching GPU type) if
@@ -29,7 +34,10 @@ from transformers import TrainingArguments
 
 from train_config import LORA_CONFIG, TRAINING_ARGS, load_and_format_dataset
 
-DATA_FILE = "data/raw/bitext_retail_bank.jsonl"
+DATA_FILES = [
+    "data/raw/bitext_retail_bank.jsonl",              # real data: ACCOUNT/LOAN/PASSWORD/CONTACT/FIND
+    "data/raw/retail_exception_synthetic.jsonl",       # synthetic: RETAIL_EXCEPTION (not in the real dataset)
+]
 
 MODEL_OUTPUT_DIR = "/content/drive/MyDrive/LJMU_Research/two-tier-system-models"
 GGUF_NAME = f"{MODEL_OUTPUT_DIR}/retail_bank_assistant"
@@ -47,11 +55,14 @@ def main():
             "would only exist on Colab's temporary local disk."
         )
 
-    if not os.path.exists(DATA_FILE):
-        raise FileNotFoundError(
-            f"{DATA_FILE} not found. Run scripts/fetch_bitext_banking.py first "
-            f"(from the project root) to regenerate the training data."
-        )
+    missing = [f for f in DATA_FILES if not os.path.exists(f)]
+    if missing:
+        hint = {
+            "data/raw/bitext_retail_bank.jsonl": "Run scripts/fetch_bitext_banking.py first (from the project root).",
+            "data/raw/retail_exception_synthetic.jsonl": "Run scripts/generate_exception_training_data.py first (from the project root).",
+        }
+        details = "\n".join(f"  - {f}: {hint.get(f, 'file not found')}" for f in missing)
+        raise FileNotFoundError(f"Missing training data file(s):\n{details}")
 
     os.makedirs(MODEL_OUTPUT_DIR, exist_ok=True)
 
@@ -64,8 +75,8 @@ def main():
     )
     model = FastLanguageModel.get_peft_model(model, **LORA_CONFIG)
 
-    print(f"Loading training data from {DATA_FILE}...")
-    dataset = load_and_format_dataset(DATA_FILE, assistant_name="Retail Bank Assistant")
+    print(f"Loading training data from {DATA_FILES}...")
+    dataset = load_and_format_dataset(DATA_FILES, assistant_name="Retail Bank Assistant")
     print(f"Loaded {len(dataset)} training examples")
 
     trainer = SFTTrainer(

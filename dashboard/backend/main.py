@@ -81,6 +81,7 @@ def normalize(df):
     out["total_ms"] = num(df, "total_latency_ms").fillna(out["t1_ms"] + out["t2_ms"].fillna(0))
     out["load_ms"] = num(df, "tier1_load_ms")
     out["cost"] = num(df, "estimated_cost_usd").fillna(0.0)
+    out["claude_conf"] = num(df, "tier2_confidence")   # Claude's own self-reported confidence (escalated rows only)
     out["is_exc"] = col(df, "is_exception").map(lambda v: str(v).strip().lower() == "true")
     out["threshold"] = num(df, "threshold_used")
     out["model"] = col(df, "tier1_model")
@@ -128,6 +129,19 @@ def metrics(g):
         "escalated_pct": 100.0 * esc.sum() / n if n else None,
         "avg_conf": g["conf"].mean(),
         "avg_conf_min": g["conf_min"].mean(),
+        # Splitting average confidence by what happened to the query is more useful than one
+        # blended number: routing itself is decided by confidence vs. threshold, so the overall
+        # average mixes two different populations. These two let you compare "how confident were
+        # the answers we kept locally" against "how confident were the ones sent to Claude" -
+        # and pick a new threshold using the gap between them.
+        "avg_local_conf": g.loc[local, "conf"].mean() if local.any() else None,
+        "avg_escalated_conf": g.loc[esc, "conf"].mean() if esc.any() else None,
+        # Claude's own self-reported confidence on the queries it actually answered -- a
+        # genuinely different signal from avg_escalated_conf above (which is still Tier 1's
+        # confidence, just filtered to the escalated rows). May be blank on rows logged before
+        # this was added, or on the rare row where Claude did not follow the confidence format.
+        "avg_claude_conf": g["claude_conf"].mean() if g["claude_conf"].notna().any() else None,
+        "claude_conf_known": int(g["claude_conf"].notna().sum()),
         "median_total_ms": g["total_ms"].median(),
         "median_local_ms": g.loc[local, "total_ms"].median(),
         "median_escalated_ms": g.loc[esc, "total_ms"].median(),

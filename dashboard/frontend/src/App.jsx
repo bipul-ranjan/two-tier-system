@@ -4,6 +4,7 @@ import RunLedger from "./components/RunLedger";
 import ConfidenceStrip from "./components/ConfidenceStrip";
 import TrendChart from "./components/TrendChart";
 import LatencyChart from "./components/LatencyChart";
+import Overview from "./components/Overview";
 import { UnitTable, ScenarioTable, RecentTable } from "./components/Tables";
 import { fmtClock, fmtConf, fmtMs, fmtUsd, fmtWhen, runLabel, unitLabel } from "./format";
 
@@ -26,6 +27,9 @@ function Readout({ k, thresholds }) {
   const timing = [];
   if (k.median_local_ms != null) timing.push(`Answers that stayed local took a median ${fmtMs(k.median_local_ms)}`);
   if (k.median_escalated_ms != null) timing.push(`queries sent to Claude took ${fmtMs(k.median_escalated_ms)} in total`);
+  const split = [];
+  if (k.avg_local_conf != null) split.push(`answers kept locally averaged ${fmtConf(k.avg_local_conf)} confidence`);
+  if (k.avg_claude_conf != null) split.push(`Claude self-reported ${fmtConf(k.avg_claude_conf)} confidence on the ${k.claude_conf_known} ${k.claude_conf_known === 1 ? "query it" : "queries it"} answered`);
   return (
     <>
       <p className="readout">
@@ -34,6 +38,7 @@ function Readout({ k, thresholds }) {
         {against}.
       </p>
       <p className="readout-sub">
+        {split.length ? `${split.join(", and ")}. ` : ""}
         {timing.length ? `${timing.join("; ")}. ` : ""}Claude spend for this run was {fmtUsd(k.tier2_cost_usd)}.
       </p>
     </>
@@ -43,13 +48,17 @@ function Readout({ k, thresholds }) {
 export default function App() {
   const runsQ = useLiveData("/api/runs");
   const [picked, setPicked] = useState(null); // null = follow the newest run
+  const [overview, setOverview] = useState(true); // land on the cross-run overview first
 
   const runs = runsQ.data?.runs ?? [];
   const latestId = runs.length ? runs[runs.length - 1].run_id : null;
   const runId = picked && runs.some((r) => r.run_id === picked) ? picked : latestId;
-  const detailQ = useLiveData(runId ? `/api/run?run_id=${encodeURIComponent(runId)}` : null);
+  const detailQ = useLiveData(!overview && runId ? `/api/run?run_id=${encodeURIComponent(runId)}` : null);
   const d = detailQ.data;
-  const pick = (id) => setPicked(id === latestId ? null : id);
+  const pick = (id) => {
+    setOverview(false);
+    setPicked(id === latestId ? null : id);
+  };
 
   if (runsQ.error && !runsQ.data) {
     return (
@@ -73,7 +82,7 @@ export default function App() {
   const live = !runsQ.error;
   return (
     <div className="shell">
-      <RunLedger runs={runs} selectedId={runId} onPick={pick} />
+      <RunLedger runs={runs} selectedId={runId} onPick={pick} onOverview={() => setOverview(true)} overviewSelected={overview} />
 
       <main className="main">
         <header className="top">
@@ -87,13 +96,15 @@ export default function App() {
           </div>
         </header>
 
-        {runsQ.data.source === "latest_only" && (
+        {!overview && runsQ.data.source === "latest_only" && (
           <p className="notice">
             Only the latest run is available, so there is nothing to compare yet. Run history builds up from your next pipeline run.
           </p>
         )}
 
-        {!d ? (
+        {overview ? (
+          <Overview runs={runs} />
+        ) : !d ? (
           <p className="hint">Loading this run.</p>
         ) : (
           <>
