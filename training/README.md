@@ -49,6 +49,10 @@ token = userdata.get('GITHUB_TOKEN')
 
 Also worth noting for planning: 5 epochs at rank 32 will take longer per model than the original 3-epoch, rank-16 setup -- budget extra Colab session time accordingly, and keep an eye on the T4's session limits if you're on the free tier.
 
+#### Resuming after a dropped session
+
+Both scripts now checkpoint to Google Drive every 250 steps during training (`payments_checkpoints/` / `retail_checkpoints/` alongside the GGUF output), keeping the 3 most recent. If a session disconnects mid-run, just re-run the same script in a fresh session (same repo clone, same steps) -- it detects the last checkpoint on Drive automatically and resumes from there instead of starting over from step 0. You'll see `Found an existing checkpoint at ... -- resuming from there instead of starting over.` printed if this happens. This is specifically why the checkpoint directory is on Drive and not local Colab disk: a checkpoint on local disk would be wiped by the same disconnect it's meant to protect against.
+
 ### 5. Regenerate the training data
 
 The actual data files aren't stored in Git (see the main `.gitignore` — same reasoning as `data/raw/` throughout this project: reproducible from code, not worth version-controlling). Regenerate them fresh in Colab:
@@ -80,11 +84,13 @@ After restarting, repeat steps 3–5 (clone, install, regenerate data) since a r
 
 The real Bitext dataset has no fraud/hardship/vulnerable-customer category at all — only the "normal" categories (ACCOUNT/LOAN/PASSWORD/CONTACT/FIND). Without this step, retail-bank-assistant never sees anything resembling those scenarios during training, which was the main reason RETAIL_EXCEPTION scored the lowest confidence of any category in pipeline runs. `scripts/generate_exception_training_data.py` reuses the same synthetic templates the pipeline already uses for testing, reformatted as training data, and writes `data/raw/retail_exception_synthetic.jsonl` — deduplicated against every pipeline test query, so training data can never leak into a test run. `train_retail.py` now trains on this file plus the real data, combined. This file is also gitignored (`data/raw/*.jsonl`) like the rest of `data/raw/` — it's regenerated fresh here, same as everything else in this section, not committed. It needs `data/synthetic/synthetic_bitext_*.csv` to exist for that dedup check, which it does right after cloning (unlike `data/raw/`, `data/synthetic/` **is** committed to this repo).
 
-### 8. Download both GGUF files
+### 8. Retrieve both GGUF files from Google Drive
 
-Both scripts save their output to `training/outputs/*.gguf`. Use the Colab file browser (left sidebar, folder icon) to download:
-- `training/outputs/payment_assistant.gguf`
-- `training/outputs/retail_bank_assistant.gguf`
+Both scripts save directly to Google Drive during the run (not to `training/outputs/` or Colab's local disk), so there's nothing to download from the Colab file browser. Find them at:
+- `LJMU_Research/two-tier-system-models/payment_assistant.gguf`
+- `LJMU_Research/two-tier-system-models/retail_bank_assistant.gguf`
+
+in your Drive. If you have Drive for Desktop set up, right-click each and choose **Mirror files** (or wait for normal sync) to get them onto your local machine.
 
 ## What goes back into Git, and what doesn't
 

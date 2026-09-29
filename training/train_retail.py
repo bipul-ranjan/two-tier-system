@@ -32,7 +32,7 @@ from unsloth import FastLanguageModel
 from trl import SFTTrainer
 from transformers import TrainingArguments
 
-from train_config import LORA_CONFIG, TRAINING_ARGS, load_and_format_dataset
+from train_config import LORA_CONFIG, TRAINING_ARGS, load_and_format_dataset, resume_checkpoint
 
 DATA_FILES = [
     "data/raw/bitext_retail_bank.jsonl",              # real data: ACCOUNT/LOAN/PASSWORD/CONTACT/FIND
@@ -42,7 +42,9 @@ DATA_FILES = [
 MODEL_OUTPUT_DIR = "/content/drive/MyDrive/LJMU_Research/two-tier-system-models"
 GGUF_NAME = f"{MODEL_OUTPUT_DIR}/retail_bank_assistant"
 
-LOCAL_CHECKPOINT_DIR = "training/outputs/retail_checkpoints"
+# On Drive, not local disk: see the matching comment in train_payments.py -- a local
+# checkpoint would be wiped by the same disconnect it's meant to protect against.
+CHECKPOINT_DIR = f"{MODEL_OUTPUT_DIR}/retail_checkpoints"
 
 
 def main():
@@ -85,11 +87,11 @@ def main():
         train_dataset=dataset,
         dataset_text_field="text",
         max_seq_length=1024,
-        args=TrainingArguments(output_dir=LOCAL_CHECKPOINT_DIR, **TRAINING_ARGS),
+        args=TrainingArguments(output_dir=CHECKPOINT_DIR, **TRAINING_ARGS),
     )
 
     print("Starting training...")
-    trainer.train()
+    trainer.train(resume_from_checkpoint=resume_checkpoint(CHECKPOINT_DIR))
 
     print(f"Exporting to GGUF at {GGUF_NAME}.gguf (on Google Drive)...")
     model.save_pretrained_gguf(GGUF_NAME, tokenizer, quantization_method="q4_k_m")

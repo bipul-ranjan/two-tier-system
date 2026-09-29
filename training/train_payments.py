@@ -25,7 +25,7 @@ from unsloth import FastLanguageModel
 from trl import SFTTrainer
 from transformers import TrainingArguments
 
-from train_config import LORA_CONFIG, TRAINING_ARGS, load_and_format_dataset
+from train_config import LORA_CONFIG, TRAINING_ARGS, load_and_format_dataset, resume_checkpoint
 
 DATA_FILE = "data/raw/bitext_payments.jsonl"
 
@@ -34,10 +34,13 @@ DATA_FILE = "data/raw/bitext_payments.jsonl"
 MODEL_OUTPUT_DIR = "/content/drive/MyDrive/LJMU_Research/two-tier-system-models"
 GGUF_NAME = f"{MODEL_OUTPUT_DIR}/payment_assistant"
 
-# Local checkpoints during training are disposable (only matter if
-# training crashes partway through) -- kept on fast local disk rather
-# than Drive, to avoid slowing down every training step with Drive I/O.
-LOCAL_CHECKPOINT_DIR = "training/outputs/payments_checkpoints"
+# On Drive, not local disk: a run at 5 epochs takes several hours, long enough that a
+# dropped session is a real risk, not a theoretical one. A checkpoint on local /content
+# disk would be wiped by the same disconnect it's supposed to protect against -- it would
+# only survive an in-process crash with the VM itself still alive, which isn't the failure
+# mode that actually matters for a multi-hour run. The Drive I/O cost of saving here is
+# accepted deliberately in exchange for that protection.
+CHECKPOINT_DIR = f"{MODEL_OUTPUT_DIR}/payments_checkpoints"
 
 
 def main():
@@ -77,11 +80,11 @@ def main():
         train_dataset=dataset,
         dataset_text_field="text",
         max_seq_length=1024,
-        args=TrainingArguments(output_dir=LOCAL_CHECKPOINT_DIR, **TRAINING_ARGS),
+        args=TrainingArguments(output_dir=CHECKPOINT_DIR, **TRAINING_ARGS),
     )
 
     print("Starting training...")
-    trainer.train()
+    trainer.train(resume_from_checkpoint=resume_checkpoint(CHECKPOINT_DIR))
 
     print(f"Exporting to GGUF at {GGUF_NAME}.gguf (on Google Drive)...")
     model.save_pretrained_gguf(GGUF_NAME, tokenizer, quantization_method="q4_k_m")

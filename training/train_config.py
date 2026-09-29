@@ -7,8 +7,10 @@ name) -- everything else is defined once, here, and applies to both models.
 Part of the training/ package -- these scripts are meant to be run on a
 Colab GPU runtime after cloning this repo, not on your local machine.
 """
+import os
 import torch
 from datasets import load_dataset
+from transformers.trainer_utils import get_last_checkpoint
 
 # r/lora_alpha raised from 16 to 32 (more adapter capacity) and num_train_epochs
 # raised from 3 to 5 (more passes over the data), with learning_rate lowered from
@@ -27,6 +29,10 @@ LORA_CONFIG = dict(
     random_state=3407,
 )
 
+# save_strategy/save_steps/save_total_limit added so training can resume after a
+# disconnect instead of restarting from step 0 -- see resume_checkpoint() below.
+# At 5 epochs this run is long enough (several hours per model) that losing all
+# progress to a dropped Colab session is a real risk, not a theoretical one.
 TRAINING_ARGS = dict(
     per_device_train_batch_size=2,
     gradient_accumulation_steps=4,
@@ -36,7 +42,23 @@ TRAINING_ARGS = dict(
     fp16=not torch.cuda.is_bf16_supported(),
     bf16=torch.cuda.is_bf16_supported(),
     logging_steps=10,
+    save_strategy="steps",
+    save_steps=250,
+    save_total_limit=3,
 )
+
+
+def resume_checkpoint(output_dir: str):
+    """Return the path to resume from if output_dir already has a checkpoint in it (e.g.
+    from a session that disconnected mid-run), else None. output_dir MUST be on Google
+    Drive, not Colab's local /content disk -- local disk is wiped on disconnect, which
+    would make this check pointless (nothing would ever be there to resume from)."""
+    if os.path.isdir(output_dir):
+        found = get_last_checkpoint(output_dir)
+        if found:
+            print(f"Found an existing checkpoint at {found} -- resuming from there instead of starting over.")
+            return found
+    return None
 
 
 def load_and_format_dataset(jsonl_path, assistant_name: str):
