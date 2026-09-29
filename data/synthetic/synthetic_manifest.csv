@@ -1,0 +1,11 @@
+file,rows,payments_normal,retail_normal,payments_exception,retail_exception
+synthetic_bitext_01.csv,1600,526,568,247,259
+synthetic_bitext_02.csv,1600,636,650,170,144
+synthetic_bitext_03.csv,1600,513,509,301,277
+synthetic_bitext_04.csv,1600,641,557,267,135
+synthetic_bitext_05.csv,1600,572,558,264,206
+synthetic_bitext_06.csv,1600,515,595,237,253
+synthetic_bitext_07.csv,1600,625,619,155,201
+synthetic_bitext_08.csv,1600,588,506,267,239
+synthetic_bitext_09.csv,1600,579,462,231,328
+synthetic_bitext_10.csv,1600,426,590,315,269
