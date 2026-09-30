@@ -9,6 +9,15 @@ from anthropic import Anthropic
 
 client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
+
+def _extract_text(response) -> str:
+    """response.content can include a ThinkingBlock (the model's internal reasoning) before
+    the actual text answer, when extended thinking is active for this model/account --
+    content[0] is NOT reliably the answer. Concatenate every block whose type is "text"
+    instead of assuming position 0 (which has no .text attribute on a ThinkingBlock and
+    crashes if one is ever returned here)."""
+    return "".join(block.text for block in response.content if getattr(block, "type", None) == "text")
+
 # claude-haiku-4-5 is the cheapest current Claude model -- the right
 # choice for a cost-cascade's escalation tier, same role GPT-4o-mini
 # played in the original design.
@@ -52,14 +61,18 @@ def ask_tier2(query: str, context: str = "") -> dict:
     self-reported confidence, and token usage."""
     user_content = f"{context}\n\nQuestion: {query}" if context else query
 
+    # thinking explicitly disabled: see the matching comment in src/quality.py -- avoids the
+    # same truncated/empty-response failure mode if extended thinking is ever on by default
+    # for this model/account, which would eat into max_tokens before the real answer starts.
     response = client.messages.create(
         model=MODEL,
         max_tokens=520,
+        thinking={"type": "disabled"},
         system="You are a financial reasoning assistant. Answer precisely." + CONFIDENCE_INSTRUCTION,
         messages=[{"role": "user", "content": user_content}],
     )
 
-    answer, confidence = _split_confidence(response.content[0].text)
+    answer, confidence = _split_confidence(_extract_text(response))
     return {
         "answer": answer,
         "confidence": confidence,

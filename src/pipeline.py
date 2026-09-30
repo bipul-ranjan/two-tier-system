@@ -43,7 +43,8 @@ import requests
 from .config import OLLAMA_URL, get_model_for_unit
 from .tier1 import ask_tier1
 from .router import route
-from .tier2_escalate import ask_tier2, estimate_cost
+from .tier2_escalate import ask_tier2, estimate_cost, client as anthropic_client
+from .quality import judge_answer_quality, judge_answer_quality_local, QUALITY_DIMS
 
 # Whole-file exclusive locking so results_history.csv cannot be opened elsewhere
 # (Excel, a text editor) for the whole duration of a run -- not just checked once
@@ -64,12 +65,12 @@ SEED = None  # None = different random rows every run; set an int to reproduce a
 # values below to whatever your data supports. A unit not listed here, or a run whose
 # rows have no business_unit match, falls back to DEFAULT_THRESHOLD.
 THRESHOLDS = {
-    "payments": {"normal": 0.7, "exception": 0.7},
+    "payments": {"normal": 0.71, "exception": 0.71},
     # 0.55 is a suggested starting point, not a measured optimum: it sits just above
     # retail_bank's own mean/median confidence (0.529 / 0.527 in the latest run), the
     # same relationship 0.7 already has to payments' mean (0.700). Re-tune from the
     # Overview page once you have more runs at this setting.
-    "retail_bank": {"normal": 0.55, "exception": 0.55},
+    "retail_bank": {"normal": 0.62, "exception": 0.62},
 }
 DEFAULT_THRESHOLD = 0.7
 
@@ -365,7 +366,60 @@ def process_query(query: str, business_unit: str, category: str, intent: str, is
     return row
 
 
-def run_pipeline(sample: pd.DataFrame, log_path: str = None) -> pd.DataFrame:
+def score_quality_pass(rows: list) -> None:
+    """Score every row's Tier 1 answer for quality (correctness/completeness/tone/safety/
+    clarity, 1-5 each, via Claude-as-judge -- see src/quality.py), in place, adding
+    quality_<dimension>, quality_overall and quality_note keys to each row dict. Runs AFTER
+    all Tier 1/Tier 2 processing is done, so it never affects routing or latency numbers --
+    it's a separate, offline measurement of whether the answers are actually good, not just
+    confidently produced. This is one extra Claude API call per row: for a large sample this
+    adds real time and cost on top of the pipeline run itself, which is why it's opt-in
+    (--score-quality) rather than always on.
+    """
+    print(f"\nScoring answer quality for {len(rows)} rows (Claude-as-judge, {QUALITY_DIMS})...")
+    for i, row in enumerate(rows, 1):
+        result = judge_answer_quality(anthropic_client, row["query"], row["tier1_answer"])
+        if result:
+            for dim in QUALITY_DIMS:
+                row[f"quality_{dim}"] = result[dim]
+            row["quality_overall"] = round(sum(result[d] for d in QUALITY_DIMS) / len(QUALITY_DIMS), 2)
+            row["quality_note"] = result["note"]
+        else:
+            for dim in QUALITY_DIMS:
+                row[f"quality_{dim}"] = None
+            row["quality_overall"] = None
+            row["quality_note"] = None
+        if i % 10 == 0 or i == len(rows):
+            print(f"  {i}/{len(rows)} scored")
+
+
+def score_quality_pass_local(rows: list, judge_model: str) -> None:
+    """Cheap, broad first-pass quality scoring via a local Ollama model instead of Claude --
+    fast and free enough to run over every row without the cost concern that makes the
+    Claude pass opt-in. Writes quality_local_<dimension> columns, kept separate from
+    quality_<dimension> (the Claude-judged columns) so it's never mistaken for the numbers
+    you'd actually report. Treat this as a triage signal, not a citable result on its own --
+    see scripts/compare_quality_judges.py to check how well it agrees with Claude before
+    leaning on it for anything beyond that.
+    """
+    print(f"\nScoring answer quality locally via {judge_model} for {len(rows)} rows (cheap first pass, not for reporting)...")
+    for i, row in enumerate(rows, 1):
+        result = judge_answer_quality_local(judge_model, row["query"], row["tier1_answer"])
+        if result:
+            for dim in QUALITY_DIMS:
+                row[f"quality_local_{dim}"] = result[dim]
+            row["quality_local_overall"] = round(sum(result[d] for d in QUALITY_DIMS) / len(QUALITY_DIMS), 2)
+            row["quality_local_note"] = result["note"]
+        else:
+            for dim in QUALITY_DIMS:
+                row[f"quality_local_{dim}"] = None
+            row["quality_local_overall"] = None
+            row["quality_local_note"] = None
+        if i % 25 == 0 or i == len(rows):
+            print(f"  {i}/{len(rows)} scored")
+
+
+def run_pipeline(sample: pd.DataFrame, log_path: str = None, score_quality: bool = False, score_quality_local: str = None) -> pd.DataFrame:
     """Run every sampled row through the cascade. Writes one combined log
     (read by evaluate.py) plus one log per business unit.
     """
@@ -398,6 +452,11 @@ def run_pipeline(sample: pd.DataFrame, log_path: str = None) -> pd.DataFrame:
             print("Unloading models...")
             unload_models(models)
 
+        if score_quality_local:
+            score_quality_pass_local(rows, score_quality_local)
+        if score_quality:
+            score_quality_pass(rows)
+
         df = pd.DataFrame(rows)
         df.to_csv(log_path, index=False)
         for unit, group in df.groupby("business_unit"):
@@ -417,6 +476,30 @@ def run_pipeline(sample: pd.DataFrame, log_path: str = None) -> pd.DataFrame:
     return df
 
 
+def parse_cli_args(args: list) -> tuple:
+    """Simple positional-or-flag parsing, kept deliberately lightweight rather than pulling
+    in argparse for a couple of options. Returns (n, score_quality_flag, local_judge_model).
+        python -m src.pipeline 100 --score-quality
+        python -m src.pipeline 100 --score-quality-local llama3.2:3b
+        python -m src.pipeline 100 --score-quality --score-quality-local llama3.2:3b
+    """
+    score_quality_flag = "--score-quality" in args
+    local_judge_model = None
+    if "--score-quality-local" in args:
+        idx = args.index("--score-quality-local")
+        if idx + 1 >= len(args):
+            raise SystemExit("--score-quality-local needs a model name, e.g. --score-quality-local llama3.2:3b")
+        local_judge_model = args[idx + 1]
+    consumed = {"--score-quality", "--score-quality-local", local_judge_model}
+    positional = [a for a in args if a not in consumed]
+    n = int(positional[0]) if positional else N_SAMPLES
+    return n, score_quality_flag, local_judge_model
+
+
 if __name__ == "__main__":
-    n = int(sys.argv[1]) if len(sys.argv) > 1 else N_SAMPLES
-    run_pipeline(load_random_sample(n))
+    n, score_quality_flag, local_judge_model = parse_cli_args(sys.argv[1:])
+    if score_quality_flag:
+        print(f"Quality scoring is ON: every one of the {n} rows will get an extra Claude API call after processing.")
+    if local_judge_model:
+        print(f"Local quality first-pass is ON via {local_judge_model}: cheap/free, but not the numbers to report -- see scripts/compare_quality_judges.py.")
+    run_pipeline(load_random_sample(n), score_quality=score_quality_flag, score_quality_local=local_judge_model)

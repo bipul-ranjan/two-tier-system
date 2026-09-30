@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ReferenceLine, Legend } from "recharts";
 import { C, unitColor } from "../theme";
-import { fmtConf, fmtMs, fmtPct, runLabel, runTick, unitLabel } from "../format";
+import { fmtConf, fmtMs, fmtPct, fmtQuality, runLabel, runTick, unitLabel } from "../format";
 
 const METRICS = [
   { key: "avg_conf", label: "Average confidence", domain: [0, 1], fmt: fmtConf, tick: (v) => v.toFixed(1) },
   { key: "avg_local_conf", label: "Local confidence", domain: [0, 1], fmt: fmtConf, tick: (v) => v.toFixed(1) },
   { key: "avg_claude_conf", label: "Claude confidence", domain: [0, 1], fmt: fmtConf, tick: (v) => v.toFixed(1) },
+  { key: "avg_quality", label: "Answer quality", domain: [1, 5], fmt: fmtQuality, tick: (v) => v.toFixed(0) },
   { key: "local_pct", label: "Answered locally", domain: [0, 100], fmt: (v) => fmtPct(v, 0), tick: (v) => `${v}%` },
   { key: "median_total_ms", label: "Median time per query", domain: [0, "auto"], fmt: fmtMs, tick: (v) => `${Math.round(v / 1000)} s` },
 ];
@@ -59,6 +60,12 @@ export default function TrendChart({ runs, selectedId }) {
       )}
       {metric.key === "avg_claude_conf" && runs.every((r) => !r.overall.claude_conf_known) && (
         <p className="hint">No run so far has a recorded Claude confidence. This needs the updated tier2_escalate.py, and only escalated queries get a value.</p>
+      )}
+      {metric.key === "avg_quality" && runs.every((r) => !r.overall.quality_known) && (
+        <p className="hint">No run so far has answer-quality scores. Run the pipeline with --score-quality, or run scripts/backfill_quality_scores.py, to see this trend.</p>
+      )}
+      {metric.key === "avg_quality" && runs.some((r) => r.overall.quality_known > 0 && r.overall.quality_known < r.overall.rows) && (
+        <p className="hint">Quality is only scored for a sample of rows in at least one run shown here, not the full run -- treat this line as directional, not exact.</p>
       )}
     </div>
   );

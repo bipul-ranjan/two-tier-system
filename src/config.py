@@ -21,13 +21,13 @@ DEFAULT_BUSINESS_UNIT = "payments"
 
 BUSINESS_UNITS = {
     "payments": {
-        "model": "payment-assistant",
-        "assistant_name": "Payment Assistant",
+        "model": "payment-assistant-v2",
+        "assistant_name": "Payment Assistant v2",
         "description": "Fine-tuned Phi-3-mini on Bitext payments data",
         },
     "retail_bank": {
-        "model": "retail-bank-assistant",
-        "assistant_name": "Retail Bank Assistant",
+        "model": "retail-bank-assistant-v2",
+        "assistant_name": "Retail Bank Assistant v2",
         "description": "Fine-tuned Qwen2.5-1.5B on Bitext retail banking data",
     },
 }

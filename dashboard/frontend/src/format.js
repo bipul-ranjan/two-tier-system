@@ -3,6 +3,7 @@ export const fmtPct = (v, d = 0) => (v == null ? "-" : `${v.toFixed(d)}%`);
 export const fmtConf = (v) => (v == null ? "-" : v.toFixed(3));
 export const fmtMs = (v) => (v == null ? "-" : v >= 1000 ? `${(v / 1000).toFixed(1)} s` : `${Math.round(v)} ms`);
 export const fmtUsd = (v) => (v == null ? "-" : v < 0.01 ? `$${v.toFixed(5)}` : `$${v.toFixed(3)}`);
+export const fmtQuality = (v) => (v == null ? "-" : `${v.toFixed(1)}/5`);
 
 export const unitLabel = (u) => ({ payments: "Payments", retail_bank: "Retail bank" }[u] ?? u);
 

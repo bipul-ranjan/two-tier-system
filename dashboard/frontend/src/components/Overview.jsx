@@ -1,5 +1,7 @@
 import TrendChart from "./TrendChart";
-import { fmtConf, fmtPct, fmtUsd, runLabel } from "../format";
+import ResolutionTrend from "./ResolutionTrend";
+import { RunsTable } from "./Tables";
+import { fmtConf, fmtPct, fmtQuality, fmtUsd, runLabel } from "../format";
 
 /** Weighted mean of `field` across runs, weighted by `weightField` -- not a plain average
  * of the per-run averages, which would be wrong when runs have different row counts. */
@@ -40,6 +42,8 @@ export default function Overview({ runs }) {
   const avgConf = weightedMean(runs, "avg_conf", "rows");
   const avgLocalConf = weightedMean(runs, "avg_local_conf", "local");
   const avgClaudeConf = weightedMean(runs, "avg_claude_conf", "claude_conf_known");
+  const totalQualityKnown = sum(runs, "quality_known");
+  const avgQuality = weightedMean(runs, "avg_quality", "quality_known");
 
   const first = runs[0], last = runs[runs.length - 1];
   const confDrift = first && last && first !== last && first.overall.avg_conf != null && last.overall.avg_conf != null
@@ -71,6 +75,7 @@ export default function Overview({ runs }) {
           <Kpi label="Local confidence" value={fmtConf(avgLocalConf)} sub="answers kept on-device" />
           <Kpi label="Claude confidence" value={fmtConf(avgClaudeConf)} sub={totalClaudeKnown ? `${totalClaudeKnown} self-rated answers` : "not recorded yet"} />
           <Kpi label="Total Claude spend" value={fmtUsd(totalCost)} sub="all runs combined" />
+          <Kpi label="Answer quality" value={fmtQuality(avgQuality)} sub={totalQualityKnown ? `${totalQualityKnown} Claude-judged answers` : "not scored yet"} />
         </div>
         {confDrift != null && (
           <p className="hint">
@@ -81,9 +86,21 @@ export default function Overview({ runs }) {
       </section>
 
       <section className="section">
+        <h2>Local vs. Claude, by assistant</h2>
+        <p className="lede">Each assistant's share of answers kept on-device vs. sent to Claude, across every run -- so a shift in either direction is easy to spot per assistant.</p>
+        <ResolutionTrend runs={runs} selectedId={last?.run_id ?? null} />
+      </section>
+
+      <section className="section">
         <h2>Trend across every run</h2>
         <p className="lede">The same chart as on a run's page, shown on its own here. A dashed marker shows where the local models changed.</p>
         <TrendChart runs={runs} selectedId={last?.run_id ?? null} />
+      </section>
+
+      <section className="section">
+        <h2>Every run, side by side</h2>
+        <p className="lede">Oldest first, so rows line up with the chart above. "new models" flags the first run after a retrain.</p>
+        <RunsTable runs={runs} />
       </section>
     </>
   );

@@ -82,6 +82,9 @@ def normalize(df):
     out["load_ms"] = num(df, "tier1_load_ms")
     out["cost"] = num(df, "estimated_cost_usd").fillna(0.0)
     out["claude_conf"] = num(df, "tier2_confidence")   # Claude's own self-reported confidence (escalated rows only)
+    out["quality_overall"] = num(df, "quality_overall")  # Claude-as-judge answer quality (1-5), where scored
+    for dim in ("correctness", "completeness", "tone", "safety", "clarity"):
+        out[f"quality_{dim}"] = num(df, f"quality_{dim}")
     out["is_exc"] = col(df, "is_exception").map(lambda v: str(v).strip().lower() == "true")
     out["threshold"] = num(df, "threshold_used")
     out["model"] = col(df, "tier1_model")
@@ -142,12 +145,27 @@ def metrics(g):
         # this was added, or on the rare row where Claude did not follow the confidence format.
         "avg_claude_conf": g["claude_conf"].mean() if g["claude_conf"].notna().any() else None,
         "claude_conf_known": int(g["claude_conf"].notna().sum()),
+        # Answer quality (1-5, Claude-as-judge) -- a separate measurement from confidence,
+        # scored offline after the fact (see src/quality.py). Only present on rows scored
+        # with --score-quality or the backfill script, so quality_known is usually much
+        # smaller than rows -- don't read avg_quality as representative of the whole run
+        # unless quality_known is close to rows.
+        "avg_quality": g["quality_overall"].mean() if g["quality_overall"].notna().any() else None,
+        "quality_known": int(g["quality_overall"].notna().sum()),
+        "quality_by_dim": {
+            dim: g[f"quality_{dim}"].mean() if g[f"quality_{dim}"].notna().any() else None
+            for dim in ("correctness", "completeness", "tone", "safety", "clarity")
+        },
         "median_total_ms": g["total_ms"].median(),
         "median_local_ms": g.loc[local, "total_ms"].median(),
         "median_escalated_ms": g.loc[esc, "total_ms"].median(),
         "tier2_cost_usd": g["cost"].sum(),
         "cold_starts": int((g["load_ms"] > COLD_START_MS).sum()),
         "load_known": int(g["load_ms"].notna().sum()),      # rows that recorded a model-load time at all
+        # The threshold(s) actually in effect for this group. Usually one value; a list lets a
+        # mixed group (e.g. a run where the threshold changed mid-way) show that honestly rather
+        # than picking one arbitrarily.
+        "threshold": sorted({round(float(t), 3) for t in g["threshold"].dropna()}),
     }
 
 

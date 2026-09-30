@@ -5,8 +5,9 @@ import ConfidenceStrip from "./components/ConfidenceStrip";
 import TrendChart from "./components/TrendChart";
 import LatencyChart from "./components/LatencyChart";
 import Overview from "./components/Overview";
+import QualityBreakdown from "./components/QualityBreakdown";
 import { UnitTable, ScenarioTable, RecentTable } from "./components/Tables";
-import { fmtClock, fmtConf, fmtMs, fmtUsd, fmtWhen, runLabel, unitLabel } from "./format";
+import { fmtClock, fmtConf, fmtMs, fmtQuality, fmtUsd, fmtWhen, runLabel, unitLabel } from "./format";
 
 function Message({ title, children }) {
   return (
@@ -30,6 +31,7 @@ function Readout({ k, thresholds }) {
   const split = [];
   if (k.avg_local_conf != null) split.push(`answers kept locally averaged ${fmtConf(k.avg_local_conf)} confidence`);
   if (k.avg_claude_conf != null) split.push(`Claude self-reported ${fmtConf(k.avg_claude_conf)} confidence on the ${k.claude_conf_known} ${k.claude_conf_known === 1 ? "query it" : "queries it"} answered`);
+  if (k.avg_quality != null) split.push(`answer quality averaged ${fmtQuality(k.avg_quality)} across the ${k.quality_known} ${k.quality_known === 1 ? "answer" : "answers"} Claude judged`);
   return (
     <>
       <p className="readout">
@@ -153,6 +155,17 @@ export default function App() {
               <UnitTable rows={d.by_unit} />
             </section>
 
+            {d.kpis.quality_known > 0 && (
+              <section className="section">
+                <h2>Answer quality, by dimension</h2>
+                <p className="lede">
+                  Claude-as-judge, 1-5 per dimension, on the {d.kpis.quality_known} of {d.kpis.rows} answers scored in this run.
+                  {d.kpis.quality_known < d.kpis.rows ? " Not the full run -- treat as a sample, not a census." : ""}
+                </p>
+                <QualityBreakdown byDim={d.kpis.quality_by_dim} />
+              </section>
+            )}
+
             {d.scenarios.length > 0 && (
               <section className="section">
                 <h2>Normal and exception queries</h2>
@@ -173,6 +186,7 @@ export default function App() {
                 <li>A query is answered locally when its confidence is at or above the threshold. Otherwise it is sent to Claude.</li>
                 <li>Time is measured from the start of the query to the final answer, including the Claude call when there is one.</li>
                 <li>Claude spend is estimated from token counts and the prices set in tier2_escalate.py.</li>
+                <li>Answer quality (1-5) is a separate, offline measurement from confidence: Claude scores the actual answer text against correctness, completeness, tone, safety and clarity, after the run finishes. Only present on rows scored with --score-quality or the backfill script -- most rows have no quality score at all unless you asked for one.</li>
                 <li>The page reads the pipeline logs directly and refreshes every five seconds, so it follows a run while it is in progress.</li>
               </ul>
             </details>

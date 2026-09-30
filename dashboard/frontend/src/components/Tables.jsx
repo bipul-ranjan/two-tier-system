@@ -1,4 +1,4 @@
-import { fmtConf, fmtMs, fmtPct, fmtUsd, fmtWhen, unitLabel } from "../format";
+import { fmtConf, fmtMs, fmtPct, fmtUsd, fmtWhen, runLabel, unitLabel } from "../format";
 
 function Meter({ pct }) {
   return (
@@ -67,6 +67,45 @@ export function ScenarioTable({ rows }) {
               <td><Meter pct={r.escalated_pct} /></td>
               <td className="num">{fmtConf(r.avg_local_conf)}</td>
               <td className="num">{r.claude_conf_known > 0 ? fmtConf(r.avg_claude_conf) : "-"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export function RunsTable({ runs }) {
+  const changed = runs.map((r, i) => i > 0 && JSON.stringify(r.models) !== JSON.stringify(runs[i - 1].models));
+  const latestId = runs.length ? runs[runs.length - 1].run_id : null;
+  return (
+    <div className="table-wrap">
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Run</th>
+            <th className="num">Queries</th>
+            <th>Answered locally</th>
+            <th className="num">Local conf</th>
+            <th className="num">Claude conf</th>
+            <th className="num">Median time</th>
+            <th className="num">Claude spend</th>
+          </tr>
+        </thead>
+        <tbody>
+          {runs.map((r, i) => (
+            <tr key={r.run_id}>
+              <td>
+                {runLabel(r.run_id)}
+                {r.run_id === latestId && <span className="tag">latest</span>}
+                {changed[i] && <span className="tag tag-models">new models</span>}
+              </td>
+              <td className="num">{r.rows}</td>
+              <td><Meter pct={r.overall.local_pct} /></td>
+              <td className="num">{fmtConf(r.overall.avg_local_conf)}</td>
+              <td className="num">{r.overall.claude_conf_known > 0 ? fmtConf(r.overall.avg_claude_conf) : "-"}</td>
+              <td className="num">{fmtMs(r.overall.median_total_ms)}</td>
+              <td className="num">{fmtUsd(r.overall.tier2_cost_usd)}</td>
             </tr>
           ))}
         </tbody>
