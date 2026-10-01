@@ -82,9 +82,12 @@ def normalize(df):
     out["load_ms"] = num(df, "tier1_load_ms")
     out["cost"] = num(df, "estimated_cost_usd").fillna(0.0)
     out["claude_conf"] = num(df, "tier2_confidence")   # Claude's own self-reported confidence (escalated rows only)
+    out["claude_prompt_version"] = col(df, "tier2_prompt_version")   # which Tier 2 system prompt was in effect (escalated rows only)
     out["quality_overall"] = num(df, "quality_overall")  # Claude-as-judge answer quality (1-5), where scored
+    out["quality_local_overall"] = num(df, "quality_local_overall")  # local-SLM-as-judge (cheap first pass, separate judge)
     for dim in ("correctness", "completeness", "tone", "safety", "clarity"):
         out[f"quality_{dim}"] = num(df, f"quality_{dim}")
+        out[f"quality_local_{dim}"] = num(df, f"quality_local_{dim}")
     out["is_exc"] = col(df, "is_exception").map(lambda v: str(v).strip().lower() == "true")
     out["threshold"] = num(df, "threshold_used")
     out["model"] = col(df, "tier1_model")
@@ -156,6 +159,15 @@ def metrics(g):
             dim: g[f"quality_{dim}"].mean() if g[f"quality_{dim}"].notna().any() else None
             for dim in ("correctness", "completeness", "tone", "safety", "clarity")
         },
+        # Local-SLM-judge quality: a SEPARATE, less validated signal (see src/quality.py) --
+        # kept in its own fields throughout, never blended with the Claude-judged quality_*
+        # fields above, so the dashboard never implies they're the same measurement.
+        "avg_quality_local": g["quality_local_overall"].mean() if g["quality_local_overall"].notna().any() else None,
+        "quality_local_known": int(g["quality_local_overall"].notna().sum()),
+        "quality_local_by_dim": {
+            dim: g[f"quality_local_{dim}"].mean() if g[f"quality_local_{dim}"].notna().any() else None
+            for dim in ("correctness", "completeness", "tone", "safety", "clarity")
+        },
         "median_total_ms": g["total_ms"].median(),
         "median_local_ms": g.loc[local, "total_ms"].median(),
         "median_escalated_ms": g.loc[esc, "total_ms"].median(),
@@ -176,6 +188,37 @@ def models_of(g):
         names = sub["model"].dropna()
         out[unit] = names.mode().iloc[0] if not names.empty else None
     return out
+
+
+def claude_prompt_version_of(g):
+    """The Tier 2 system prompt version in effect for this run's escalations, if any --
+    shared across both business units (Claude is one model either way), unlike models_of()
+    which is necessarily per-unit."""
+    versions = g["claude_prompt_version"].dropna()
+    return versions.mode().iloc[0] if not versions.empty else None
+
+
+def quality_three_way(g):
+    """Claude-judged quality (quality_overall), split three ways: the Payments SLM's own
+    answers, the Retail Bank SLM's own answers, and Claude's answers -- each only for the
+    rows that model actually produced (LOCAL for an SLM, ESCALATE for Claude, which handles
+    escalations from both units combined, since it's the same model either way).
+
+    This is NOT a fair "which model is better" comparison -- ESCALATE is specifically the
+    subset each SLM found hard (low confidence), while LOCAL is the subset it found easy, so
+    the three groups are answering different-difficulty queries by construction. Read this as
+    "is the quality acceptable on each path," not as a capability ranking between the SLMs and
+    Claude. For a same-query, controlled comparison, see the quality_draft_* columns instead
+    (scripts/backfill_quality_scores.py --draft).
+    """
+    def q(sub):
+        vals = sub["quality_overall"].dropna()
+        return {"avg": vals.mean() if len(vals) else None, "known": int(len(vals)), "rows": int(len(sub))}
+
+    payments_local = g[(g["unit"] == "payments") & (g["decision"] == "LOCAL")]
+    retail_local = g[(g["unit"] == "retail_bank") & (g["decision"] == "LOCAL")]
+    claude = g[g["decision"] == "ESCALATE"]
+    return {"payments_slm": q(payments_local), "retail_slm": q(retail_local), "claude": q(claude)}
 
 
 # --------------------------------------------------------------------------- API
@@ -200,8 +243,10 @@ def runs():
             "run_id": run_id,
             "rows": len(g),
             "models": models_of(g),
+            "claude_prompt_version": claude_prompt_version_of(g),
             "overall": metrics(g),
             "units": {unit: metrics(sub) for unit, sub in g.groupby("unit")},
+            "quality_three_way": quality_three_way(g),
         })
     return clean({"source": source, "runs": out})
 
@@ -234,10 +279,12 @@ def run_detail(run_id: str = Query(...)):
         "run_id": run_id,
         "source": source,
         "models": models_of(g),
+        "claude_prompt_version": claude_prompt_version_of(g),
         "thresholds": sorted({round(float(t), 3) for t in g["threshold"].dropna()}),
         "started": g["start"].min().isoformat() if g["start"].notna().any() else None,
         "ended": g["end"].max().isoformat() if g["end"].notna().any() else None,
         "kpis": metrics(g),
+        "quality_three_way": quality_three_way(g),
         "by_unit": [{"unit": u, "model": models_of(sub).get(u), **metrics(sub)} for u, sub in g.groupby("unit")],
         "scenarios": scenarios,
         "latency": {

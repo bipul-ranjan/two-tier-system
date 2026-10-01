@@ -10,5 +10,6 @@ export const C = {
   exception: "#C2185B",
   payments: "#3D5AD0",
   retail_bank: "#0F8B8D",
+  claudePrompt: "#8E44AD",  // distinct from tier2/exception/payments -- Tier 2 system prompt changes specifically
 };
 export const unitColor = (u) => C[u] ?? "#7A8894";

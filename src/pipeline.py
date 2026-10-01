@@ -65,12 +65,12 @@ SEED = None  # None = different random rows every run; set an int to reproduce a
 # values below to whatever your data supports. A unit not listed here, or a run whose
 # rows have no business_unit match, falls back to DEFAULT_THRESHOLD.
 THRESHOLDS = {
-    "payments": {"normal": 0.71, "exception": 0.71},
+    "payments": {"normal": 0.7, "exception": 0.7},
     # 0.55 is a suggested starting point, not a measured optimum: it sits just above
     # retail_bank's own mean/median confidence (0.529 / 0.527 in the latest run), the
     # same relationship 0.7 already has to payments' mean (0.700). Re-tune from the
     # Overview page once you have more runs at this setting.
-    "retail_bank": {"normal": 0.62, "exception": 0.62},
+    "retail_bank": {"normal": 0.55, "exception": 0.55},
 }
 DEFAULT_THRESHOLD = 0.7
 
@@ -337,6 +337,7 @@ def process_query(query: str, business_unit: str, category: str, intent: str, is
         "tier2_input_tokens": None,
         "tier2_output_tokens": None,
         "tier2_confidence": None,
+        "tier2_prompt_version": None,
         "estimated_cost_usd": 0.0,
         "final_answer": t1_result["answer"],
     }
@@ -344,12 +345,13 @@ def process_query(query: str, business_unit: str, category: str, intent: str, is
     tier2_latency_ms = None
     if decision == "ESCALATE":
         t2_start = time.perf_counter()
-        t2_result = ask_tier2(query)
+        t2_result = ask_tier2(query, business_unit=business_unit)
         tier2_latency_ms = (time.perf_counter() - t2_start) * 1000
         row["tier2_latency_ms"] = round(tier2_latency_ms, 1)
         row["tier2_input_tokens"] = t2_result["input_tokens"]
         row["tier2_output_tokens"] = t2_result["output_tokens"]
         row["tier2_confidence"] = t2_result["confidence"]
+        row["tier2_prompt_version"] = t2_result["prompt_version"]
         row["estimated_cost_usd"] = estimate_cost(t2_result["input_tokens"], t2_result["output_tokens"])
         row["final_answer"] = t2_result["answer"]
 
@@ -378,7 +380,11 @@ def score_quality_pass(rows: list) -> None:
     """
     print(f"\nScoring answer quality for {len(rows)} rows (Claude-as-judge, {QUALITY_DIMS})...")
     for i, row in enumerate(rows, 1):
-        result = judge_answer_quality(anthropic_client, row["query"], row["tier1_answer"])
+        # final_answer, not tier1_answer: for an escalated row, tier1_answer is the discarded
+        # low-confidence draft, and final_answer is what Tier 2 actually produced and the
+        # customer actually received. Scoring tier1_answer for an escalated row would measure
+        # the wrong text entirely.
+        result = judge_answer_quality(anthropic_client, row["query"], row["final_answer"])
         if result:
             for dim in QUALITY_DIMS:
                 row[f"quality_{dim}"] = result[dim]
@@ -404,7 +410,7 @@ def score_quality_pass_local(rows: list, judge_model: str) -> None:
     """
     print(f"\nScoring answer quality locally via {judge_model} for {len(rows)} rows (cheap first pass, not for reporting)...")
     for i, row in enumerate(rows, 1):
-        result = judge_answer_quality_local(judge_model, row["query"], row["tier1_answer"])
+        result = judge_answer_quality_local(judge_model, row["query"], row["final_answer"])  # see comment above
         if result:
             for dim in QUALITY_DIMS:
                 row[f"quality_local_{dim}"] = result[dim]

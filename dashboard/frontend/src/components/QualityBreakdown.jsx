@@ -4,16 +4,11 @@ import { fmtQuality } from "../format";
 
 const DIM_LABELS = { correctness: "Correctness", completeness: "Completeness", tone: "Tone", safety: "Safety", clarity: "Clarity" };
 
-/** Per-dimension answer quality (1-5, Claude-as-judge) for one run -- a bar per dimension,
- * so a specific weakness (e.g. tone on exception queries) is visible, not just one blended
- * "quality" number. */
-export default function QualityBreakdown({ byDim }) {
+function DimChart({ byDim }) {
   const data = Object.entries(DIM_LABELS)
     .map(([key, label]) => ({ key, label, value: byDim?.[key] ?? null }))
     .filter((d) => d.value != null);
-
   if (data.length === 0) return null;
-
   return (
     <div className="chart" style={{ height: 200 }}>
       <ResponsiveContainer>
@@ -29,6 +24,35 @@ export default function QualityBreakdown({ byDim }) {
           </Bar>
         </BarChart>
       </ResponsiveContainer>
+    </div>
+  );
+}
+
+/** Per-dimension answer quality (1-5) for one run, from BOTH judges shown side by side and
+ * clearly labelled -- never blended into one number, since they're different measurements
+ * (Claude is the validated judge; local is a cheap, less-validated first pass). Either panel
+ * is omitted if that judge scored nothing in this run. */
+export default function QualityBreakdown({ byDim, known, byDimLocal, knownLocal, rows }) {
+  const hasClaude = known > 0;
+  const hasLocal = knownLocal > 0;
+  if (!hasClaude && !hasLocal) return null;
+
+  return (
+    <div className="resolution-trend">
+      {hasClaude && (
+        <div className="resolution-trend-panel">
+          <h3>Claude judge</h3>
+          <p className="lede" style={{ marginTop: 0 }}>{known} of {rows} answers scored.</p>
+          <DimChart byDim={byDim} />
+        </div>
+      )}
+      {hasLocal && (
+        <div className="resolution-trend-panel">
+          <h3>Local judge</h3>
+          <p className="lede" style={{ marginTop: 0 }}>{knownLocal} of {rows} answers scored -- cheap first pass, less validated.</p>
+          <DimChart byDim={byDimLocal} />
+        </div>
+      )}
     </div>
   );
 }

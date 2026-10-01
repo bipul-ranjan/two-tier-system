@@ -31,7 +31,8 @@ function Readout({ k, thresholds }) {
   const split = [];
   if (k.avg_local_conf != null) split.push(`answers kept locally averaged ${fmtConf(k.avg_local_conf)} confidence`);
   if (k.avg_claude_conf != null) split.push(`Claude self-reported ${fmtConf(k.avg_claude_conf)} confidence on the ${k.claude_conf_known} ${k.claude_conf_known === 1 ? "query it" : "queries it"} answered`);
-  if (k.avg_quality != null) split.push(`answer quality averaged ${fmtQuality(k.avg_quality)} across the ${k.quality_known} ${k.quality_known === 1 ? "answer" : "answers"} Claude judged`);
+  if (k.avg_quality != null) split.push(`answer quality (Claude-judged) averaged ${fmtQuality(k.avg_quality)} across ${k.quality_known} ${k.quality_known === 1 ? "answer" : "answers"}`);
+  if (k.avg_quality_local != null) split.push(`answer quality (local-judged) averaged ${fmtQuality(k.avg_quality_local)} across ${k.quality_local_known} ${k.quality_local_known === 1 ? "answer" : "answers"}`);
   return (
     <>
       <p className="readout">
@@ -155,14 +156,42 @@ export default function App() {
               <UnitTable rows={d.by_unit} />
             </section>
 
-            {d.kpis.quality_known > 0 && (
+            {d.quality_three_way && (d.quality_three_way.payments_slm.known > 0 || d.quality_three_way.retail_slm.known > 0 || d.quality_three_way.claude.known > 0) && (
+              <section className="section">
+                <h2>Answer quality, by model</h2>
+                <p className="lede">
+                  Each model's own answers only -- SLMs on what they kept local, Claude on what it was escalated. Not an equal-footing comparison: Claude
+                  only ever sees the harder queries each SLM wasn't confident about.
+                </p>
+                <div className="kpi-row">
+                  <div className="kpi">
+                    <div className="kpi-value">{fmtQuality(d.quality_three_way.payments_slm.avg)}</div>
+                    <div className="kpi-label">Payments SLM</div>
+                    <div className="kpi-sub">{d.quality_three_way.payments_slm.known} local answers</div>
+                  </div>
+                  <div className="kpi">
+                    <div className="kpi-value">{fmtQuality(d.quality_three_way.retail_slm.avg)}</div>
+                    <div className="kpi-label">Retail bank SLM</div>
+                    <div className="kpi-sub">{d.quality_three_way.retail_slm.known} local answers</div>
+                  </div>
+                  <div className="kpi">
+                    <div className="kpi-value">{fmtQuality(d.quality_three_way.claude.avg)}</div>
+                    <div className="kpi-label">Claude</div>
+                    <div className="kpi-sub">{d.quality_three_way.claude.known} escalated answers</div>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {(d.kpis.quality_known > 0 || d.kpis.quality_local_known > 0) && (
               <section className="section">
                 <h2>Answer quality, by dimension</h2>
-                <p className="lede">
-                  Claude-as-judge, 1-5 per dimension, on the {d.kpis.quality_known} of {d.kpis.rows} answers scored in this run.
-                  {d.kpis.quality_known < d.kpis.rows ? " Not the full run -- treat as a sample, not a census." : ""}
-                </p>
-                <QualityBreakdown byDim={d.kpis.quality_by_dim} />
+                <p className="lede">1-5 per dimension. Claude and local are separate judges, shown side by side -- never averaged together.</p>
+                <QualityBreakdown
+                  byDim={d.kpis.quality_by_dim} known={d.kpis.quality_known}
+                  byDimLocal={d.kpis.quality_local_by_dim} knownLocal={d.kpis.quality_local_known}
+                  rows={d.kpis.rows}
+                />
               </section>
             )}
 
