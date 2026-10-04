@@ -65,47 +65,20 @@ SEED = None  # None = different random rows every run; set an int to reproduce a
 # and can be set separately for normal vs. exception rows within a unit -- edit the
 # values below to whatever your data supports. A unit not listed here, or a run whose
 # rows have no business_unit match, falls back to DEFAULT_THRESHOLD.
+THRESHOLDS = {
+    "payments": {"normal": 0.71, "exception": 0.71},
+    # 0.55 is a suggested starting point, not a measured optimum: it sits just above
+    # retail_bank's own mean/median confidence (0.529 / 0.527 in the latest run), the
+    # same relationship 0.7 already has to payments' mean (0.700). Re-tune from the
+    # Overview page once you have more runs at this setting.
+    "retail_bank": {"normal": 0.6, "exception": 0.6},
+}
 DEFAULT_THRESHOLD = 0.7
 
-# Per-category, not just per-unit or per-exception-flag: confidence genuinely differs by
-# category, not just by business unit -- e.g. PAYMENT_EXCEPTION's own 30th-percentile
-# confidence (0.674) sits well below CARD's (0.717), even though both are "payments". A
-# single normal/exception split lumps CARD/ATM/FEES/TRANSFER together despite that real
-# spread. category is known from the query itself before Tier 1 ever answers it -- unlike
-# a random perturbation around the threshold, this genuinely conditions the decision on the
-# query, at zero added cost (a dict lookup, not a model call).
-#
-# Computed as the 30th percentile of tier1_confidence_avg within each category, from the
-# live results_history.csv (the same equation as the single-threshold version: tau =
-# F^-1(1-p*), just applied per-category instead of per-unit). Recompute whenever the
-# underlying model changes significantly -- these are a snapshot, not a fixed constant,
-# exactly like the single-threshold version they replace.
-THRESHOLDS = {
-    "payments": {
-        "ATM": 0.697, "CARD": 0.717, "FEES": 0.681, "PAYMENT_EXCEPTION": 0.674, "TRANSFER": 0.730,
-    },
-    "retail_bank": {
-        "ACCOUNT": 0.575, "CONTACT": 0.542, "FIND": 0.554, "LOAN": 0.560, "PASSWORD": 0.627, "RETAIL_EXCEPTION": 0.556,
-    },
-}
 
-
-def get_threshold(business_unit: str, is_exception: bool, category: str = None) -> float:
-    """category, when given, looks up the per-category threshold directly -- the real
-    query-content signal. is_exception is kept as a fallback path (averaging the unit's own
-    exception/normal categories) for any caller that doesn't have category available, so
-    this stays backward compatible rather than silently changing behavior for existing
-    callers that haven't been updated to pass it.
-    """
-    unit_thresholds = THRESHOLDS.get(business_unit, {})
-    if category is not None and category in unit_thresholds:
-        return unit_thresholds[category]
-    if not unit_thresholds:
-        return DEFAULT_THRESHOLD
-    exception_cats = [c for c in unit_thresholds if c in EXCEPTION_CATEGORIES]
-    normal_cats = [c for c in unit_thresholds if c not in EXCEPTION_CATEGORIES]
-    cats = exception_cats if is_exception and exception_cats else normal_cats or list(unit_thresholds)
-    return sum(unit_thresholds[c] for c in cats) / len(cats)
+def get_threshold(business_unit: str, is_exception: bool) -> float:
+    scenario = "exception" if is_exception else "normal"
+    return THRESHOLDS.get(business_unit, {}).get(scenario, DEFAULT_THRESHOLD)
 
 # How long Ollama keeps a model loaded after each request during a run. Finite on
 # purpose: if the script is killed hard (so it can't unload), the models still free
@@ -322,7 +295,7 @@ def unload_models(models: list) -> None:
 
 def process_query(query: str, business_unit: str, category: str, intent: str, is_exception: bool, run_id: str,
                    cache_index: SemanticCacheIndex = None) -> dict:
-    threshold = get_threshold(business_unit, is_exception, category=category)
+    threshold = get_threshold(business_unit, is_exception)
 
     start_dt = datetime.now()
     t_query_start = time.perf_counter()
