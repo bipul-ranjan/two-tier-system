@@ -21,7 +21,7 @@ import re
 import numpy as np
 import pandas as pd
 
-SIMILARITY_THRESHOLD = 0.84  # at/above this + cheap checks pass: serve directly
+SIMILARITY_THRESHOLD = 0.95  # at/above this + cheap checks pass: serve directly
                               # below this: cache miss, escalate to Tier 2 as normal
 
 EMBED_MODEL_NAME = "all-MiniLM-L6-v2"  # small, fast, local, free -- no per-query API cost
