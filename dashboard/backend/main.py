@@ -165,10 +165,11 @@ def metrics(g):
         "avg_claude_conf": g["claude_conf"].mean() if g["claude_conf"].notna().any() else None,
         "claude_conf_known": int(g["claude_conf"].notna().sum()),
         # Answer quality (1-5, Claude-as-judge) -- a separate measurement from confidence,
-        # scored offline after the fact (see src/quality.py). Only present on rows scored
-        # with --score-quality or the backfill script, so quality_known is usually much
-        # smaller than rows -- don't read avg_quality as representative of the whole run
-        # unless quality_known is close to rows.
+        # scored offline after the fact (see src/quality.py). Scored automatically after every
+        # normal run; rows from --noquality runs, or from before that existed, only have a score
+        # once scripts/backfill_quality_scores.py has run on them -- so quality_known can be
+        # smaller than rows, and avg_quality isn't representative of the whole run unless
+        # quality_known is close to rows.
         "avg_quality": g["quality_overall"].mean() if g["quality_overall"].notna().any() else None,
         "quality_known": int(g["quality_overall"].notna().sum()),
         "quality_by_dim": {
@@ -233,8 +234,14 @@ def quality_three_way(g):
 
     payments_local = g[(g["unit"] == "payments") & (g["decision"] == "LOCAL")]
     retail_local = g[(g["unit"] == "retail_bank") & (g["decision"] == "LOCAL")]
-    claude = g[g["decision"] == "ESCALATE"]
-    return {"payments_slm": q(payments_local), "retail_slm": q(retail_local), "claude": q(claude)}
+    # decision stays "ESCALATE" on a cache hit, so "escalated" alone would blend two different
+    # things: a fresh Tier 2 answer written for this query, and an old Tier 2 answer served again
+    # from the cache. They're separate buckets so "Claude quality" stays a clean measurement of
+    # Claude, and "cache" is a clean measurement of whether reused answers actually hold up --
+    # which is the real test of the cache (a cached answer judged against the NEW query).
+    claude = g[(g["decision"] == "ESCALATE") & ~g["cache_hit"]]
+    cache = g[(g["decision"] == "ESCALATE") & g["cache_hit"]]
+    return {"payments_slm": q(payments_local), "retail_slm": q(retail_local), "claude": q(claude), "cache": q(cache)}
 
 
 # --------------------------------------------------------------------------- API

@@ -351,8 +351,14 @@ def process_query(query: str, business_unit: str, category: str, intent: str, is
 
     tier2_latency_ms = None
     if decision == "ESCALATE":
-        cache_result = try_semantic_cache(cache_index, query, category=category, intent=intent) \
-            if cache_index is not None else None
+        cache_result = None
+        if cache_index is not None:
+            try:
+                cache_result = try_semantic_cache(cache_index, query, category=category, intent=intent)
+            except Exception as e:
+                # The cache is an optimisation, not the pipeline's job: if a lookup fails for
+                # any reason, treat it as a miss and escalate normally rather than losing the row.
+                print(f"    WARNING: cache lookup failed ({type(e).__name__}: {e}) -- treating as a miss")
         if cache_result is not None:
             # Served from the semantic cache -- no Tier 2 call, no cost, and (for a "direct"
             # hit) no extra latency beyond the cache lookup itself. decision stays "ESCALATE"
@@ -396,8 +402,8 @@ def score_quality_pass(rows: list) -> None:
     all Tier 1/Tier 2 processing is done, so it never affects routing or latency numbers --
     it's a separate, offline measurement of whether the answers are actually good, not just
     confidently produced. This is one extra Claude API call per row: for a large sample this
-    adds real time and cost on top of the pipeline run itself, which is why it's opt-in
-    (--score-quality) rather than always on.
+    adds real time and cost on top of the pipeline run itself, which is why it can be skipped
+    with --noquality.
     """
     print(f"\nScoring answer quality for {len(rows)} rows (Claude-as-judge, {QUALITY_DIMS})...")
     for i, row in enumerate(rows, 1):
@@ -477,9 +483,19 @@ def run_pipeline(sample: pd.DataFrame, log_path: str = None, score_quality: bool
         cache_index = None
         if use_semantic_cache:
             print("Building semantic cache index from existing Tier 2 answers...")
-            cache_index = SemanticCacheIndex()
-            cache_index.build(lock.read())
-            print(f"  {len(cache_index.queries)} cached Tier 2 answers available.")
+            try:
+                cache_index = SemanticCacheIndex()
+                cache_index.build(lock.read())
+                print(f"  {len(cache_index.queries)} cached Tier 2 answers available.")
+            except Exception as e:
+                # The cache is on by default, so a missing optional dependency (e.g.
+                # sentence-transformers not installed) or a failed model download must not take
+                # down the whole run -- but it must not be silent either, or a 0% hit rate would
+                # look like "no matches" when the cache never actually ran.
+                cache_index = None
+                print(f"  WARNING: semantic cache unavailable ({type(e).__name__}: {e}).")
+                print("  Continuing this run WITHOUT the cache -- every escalation will call Claude.")
+                print("  To fix: pip install sentence-transformers   (or pass --nocache to silence this)")
         try:
             print("Preloading models...")
             load_models(models)
@@ -506,10 +522,19 @@ def run_pipeline(sample: pd.DataFrame, log_path: str = None, score_quality: bool
             print("Unloading models...")
             unload_models(models)
 
-        if score_quality_local:
-            score_quality_pass_local(rows, score_quality_local)
-        if score_quality:
-            score_quality_pass(rows)
+        # Both scoring passes are slow (one judge call per row) and now run by default, so a
+        # failure or Ctrl+C partway through must never throw away the whole finished run --
+        # rows scored so far keep their scores, the rest stay blank, and the run is saved either
+        # way. scripts/backfill_quality_scores.py is idempotent and finishes whatever is blank.
+        for scoring_pass in ([lambda: score_quality_pass_local(rows, score_quality_local)] if score_quality_local else []) + \
+                            ([lambda: score_quality_pass(rows)] if score_quality else []):
+            try:
+                scoring_pass()
+            except (Exception, KeyboardInterrupt) as e:
+                print(f"\n  WARNING: quality scoring stopped early ({type(e).__name__}: {e}).")
+                print("  The run itself is being saved anyway. To score whatever is still blank, run:")
+                print("      python scripts/backfill_quality_scores.py")
+                break
 
         df = pd.DataFrame(rows)
         df.to_csv(log_path, index=False)
@@ -532,34 +557,50 @@ def run_pipeline(sample: pd.DataFrame, log_path: str = None, score_quality: bool
 
 def parse_cli_args(args: list) -> tuple:
     """Simple positional-or-flag parsing, kept deliberately lightweight rather than pulling
-    in argparse for a few options. Returns (n, score_quality_flag, local_judge_model, use_semantic_cache).
-        python -m src.pipeline 100 --score-quality
-        python -m src.pipeline 100 --score-quality-local llama3.2:3b
-        python -m src.pipeline 100 --score-quality --score-quality-local llama3.2:3b
-        python -m src.pipeline 100 --use-semantic-cache
+    in argparse for a few options. Returns (n, score_quality, local_judge_model, use_semantic_cache).
+
+    Both the semantic cache and Claude quality evaluation are ON by default; each has an
+    explicit opt-out flag:
+        python -m src.pipeline 100                  # cache ON, quality evaluation ON
+        python -m src.pipeline 100 --nocache        # skip the semantic cache
+        python -m src.pipeline 100 --noquality      # skip the post-run Claude quality evaluation
+        python -m src.pipeline 100 --nocache --noquality
+        python -m src.pipeline 100 --score-quality-local llama3.2:3b   # extra, opt-in local judge
     """
-    score_quality_flag = "--score-quality" in args
-    use_semantic_cache = "--use-semantic-cache" in args
+    flags = {"--nocache", "--noquality", "--score-quality-local"}
+    unknown = [a for a in args if a.startswith("--") and a not in flags]
+    if unknown:
+        raise SystemExit(f"Unknown option(s): {' '.join(unknown)}. "
+                         f"Valid options: --nocache, --noquality, --score-quality-local <model>")
     local_judge_model = None
     if "--score-quality-local" in args:
         idx = args.index("--score-quality-local")
         if idx + 1 >= len(args):
             raise SystemExit("--score-quality-local needs a model name, e.g. --score-quality-local llama3.2:3b")
         local_judge_model = args[idx + 1]
-    consumed = {"--score-quality", "--score-quality-local", "--use-semantic-cache", local_judge_model}
-    positional = [a for a in args if a not in consumed]
+    positional = [a for a in args if a not in flags and a != local_judge_model]
     n = int(positional[0]) if positional else N_SAMPLES
-    return n, score_quality_flag, local_judge_model, use_semantic_cache
+    return n, "--noquality" not in args, local_judge_model, "--nocache" not in args
+
+
+def main(argv=None) -> None:
+    n, score_quality, local_judge_model, use_semantic_cache = parse_cli_args(sys.argv[1:] if argv is None else argv)
+    if use_semantic_cache:
+        print("Semantic cache: ON (default). An escalation first checks for a close-enough past Claude answer "
+              "before calling Claude again. Pass --nocache to turn it off.")
+    else:
+        print("Semantic cache: OFF (--nocache). Every escalation will call Claude.")
+    if score_quality:
+        print(f"Quality evaluation: ON (default). After processing, every one of the {n} rows' final answers -- whether "
+              f"answered by Tier 1, served from the cache, or answered by Tier 2 -- gets one Claude judge call. Pass --noquality to skip.")
+    else:
+        print("Quality evaluation: OFF (--noquality). Rows are saved with blank quality columns; "
+              "run scripts/backfill_quality_scores.py to fill them in later.")
+    if local_judge_model:
+        print(f"Local quality first-pass is ON via {local_judge_model}: cheap/free, but not the numbers to report -- see scripts/compare_quality_judges.py.")
+    run_pipeline(load_random_sample(n), score_quality=score_quality, score_quality_local=local_judge_model,
+                 use_semantic_cache=use_semantic_cache)
 
 
 if __name__ == "__main__":
-    n, score_quality_flag, local_judge_model, use_semantic_cache_flag = parse_cli_args(sys.argv[1:])
-    if score_quality_flag:
-        print(f"Quality scoring is ON: every one of the {n} rows will get an extra Claude API call after processing.")
-    if local_judge_model:
-        print(f"Local quality first-pass is ON via {local_judge_model}: cheap/free, but not the numbers to report -- see scripts/compare_quality_judges.py.")
-    if use_semantic_cache_flag:
-        print("Semantic cache is ON: escalations will first check for a close-enough past Claude answer before calling Claude again. "
-              "On a brand-new project (no results_history.csv yet), the cache starts empty -- expect 0 hits until there's real history to draw from.")
-    run_pipeline(load_random_sample(n), score_quality=score_quality_flag, score_quality_local=local_judge_model,
-                 use_semantic_cache=use_semantic_cache_flag)
+    main()

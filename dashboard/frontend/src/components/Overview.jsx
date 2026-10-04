@@ -66,6 +66,7 @@ export default function Overview({ runs }) {
   const paymentsSlmQ = threeWaySummary(runs, "payments_slm");
   const retailSlmQ = threeWaySummary(runs, "retail_slm");
   const claudeQ = threeWaySummary(runs, "claude");
+  const cacheQ = threeWaySummary(runs, "cache");
 
   const first = runs[0], last = runs[runs.length - 1];
   const confDrift = first && last && first !== last && first.overall.avg_conf != null && last.overall.avg_conf != null
@@ -104,13 +105,16 @@ export default function Overview({ runs }) {
           )}
         </div>
         <p className="lede" style={{ marginTop: 18 }}>
-          Answer quality, split by which model actually produced the answer -- Payments and Retail bank only when they answered locally, Claude only on
-          what it was escalated.
+          Answer quality, split by which source actually produced the answer -- Payments and Retail bank only when they answered locally, Claude only on
+          the fresh answers it wrote after an escalation{cacheQ.known > 0 ? ", and the cache on past Claude answers it served again" : ""}.
         </p>
         <div className="kpi-row">
           <Kpi label="Payments SLM quality" value={fmtQuality(paymentsSlmQ.avg)} sub={paymentsSlmQ.known ? `${paymentsSlmQ.known} answers, local only` : "not scored yet"} />
           <Kpi label="Retail bank SLM quality" value={fmtQuality(retailSlmQ.avg)} sub={retailSlmQ.known ? `${retailSlmQ.known} answers, local only` : "not scored yet"} />
-          <Kpi label="Claude quality" value={fmtQuality(claudeQ.avg)} sub={claudeQ.known ? `${claudeQ.known} answers, escalated only` : "not scored yet"} />
+          <Kpi label="Claude quality" value={fmtQuality(claudeQ.avg)} sub={claudeQ.known ? `${claudeQ.known} fresh Tier 2 answers` : "not scored yet"} />
+          {cacheQ.known > 0 && (
+            <Kpi label="Cache quality" value={fmtQuality(cacheQ.avg)} sub={`${cacheQ.known} cached answers re-served`} />
+          )}
         </div>
         {confDrift != null && (
           <p className="hint">

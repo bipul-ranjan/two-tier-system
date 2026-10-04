@@ -156,7 +156,7 @@ export default function App() {
               <UnitTable rows={d.by_unit} />
             </section>
 
-            {d.quality_three_way && (d.quality_three_way.payments_slm.known > 0 || d.quality_three_way.retail_slm.known > 0 || d.quality_three_way.claude.known > 0) && (
+            {d.quality_three_way && (d.quality_three_way.payments_slm.known > 0 || d.quality_three_way.retail_slm.known > 0 || d.quality_three_way.claude.known > 0 || d.quality_three_way.cache.known > 0) && (
               <section className="section">
                 <h2>Answer quality, by model</h2>
                 <p className="lede">
@@ -177,8 +177,15 @@ export default function App() {
                   <div className="kpi">
                     <div className="kpi-value">{fmtQuality(d.quality_three_way.claude.avg)}</div>
                     <div className="kpi-label">Claude</div>
-                    <div className="kpi-sub">{d.quality_three_way.claude.known} escalated answers</div>
+                    <div className="kpi-sub">{d.quality_three_way.claude.known} fresh Tier 2 answers</div>
                   </div>
+                  {d.quality_three_way.cache.known > 0 && (
+                    <div className="kpi">
+                      <div className="kpi-value">{fmtQuality(d.quality_three_way.cache.avg)}</div>
+                      <div className="kpi-label">Cache</div>
+                      <div className="kpi-sub">{d.quality_three_way.cache.known} cached answers re-served</div>
+                    </div>
+                  )}
                 </div>
               </section>
             )}
@@ -215,7 +222,7 @@ export default function App() {
                 <li>A query is answered locally when its confidence is at or above the threshold. Otherwise it is sent to Claude.</li>
                 <li>Time is measured from the start of the query to the final answer, including the Claude call when there is one.</li>
                 <li>Claude spend is estimated from token counts and the prices set in tier2_escalate.py.</li>
-                <li>Answer quality (1-5) is a separate, offline measurement from confidence: Claude scores the actual answer text against correctness, completeness, tone, safety and clarity, after the run finishes. Only present on rows scored with --score-quality or the backfill script -- most rows have no quality score at all unless you asked for one.</li>
+                <li>Answer quality (1-5) is a separate, offline measurement from confidence: Claude scores the actual answer text against correctness, completeness, tone, safety and clarity, after the run finishes -- automatically on every run, unless it was started with --noquality. Older rows, and rows from --noquality runs, only have a score once scripts/backfill_quality_scores.py has been run on them.</li>
                 <li>The page reads the pipeline logs directly and refreshes every five seconds, so it follows a run while it is in progress.</li>
               </ul>
             </details>

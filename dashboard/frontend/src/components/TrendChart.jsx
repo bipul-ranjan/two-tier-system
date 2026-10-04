@@ -26,6 +26,11 @@ const METRICS = [
     key: "quality_claude", label: "Answer quality (Escalate Claude)", domain: [1, 5], fmt: fmtQuality, tick: (v) => v.toFixed(0),
     get: threeWayGetter("claude"), known: threeWayKnown("claude"), rows: threeWayRows("claude"), noUnitBreakdown: true,
   },
+  {
+    key: "quality_cache", label: "Answer quality (Cache)", domain: [1, 5], fmt: fmtQuality, tick: (v) => v.toFixed(0),
+    get: threeWayGetter("cache"), known: threeWayKnown("cache"), rows: threeWayRows("cache"), noUnitBreakdown: true,
+    onlyIfData: true,  // hidden until a run has actually served something from the cache
+  },
   { key: "local_pct", label: "Answered locally", domain: [0, 100], fmt: (v) => fmtPct(v, 0), tick: (v) => `${v}%` },
   { key: "median_total_ms", label: "Median time per query", domain: [0, "auto"], fmt: fmtMs, tick: (v) => `${Math.round(v / 1000)} s` },
 ];
@@ -67,7 +72,7 @@ export default function TrendChart({ runs, selectedId }) {
   return (
     <div>
       <div className="segmented" role="group" aria-label="Metric to compare">
-        {METRICS.map((m) => (
+        {METRICS.filter((m) => !m.onlyIfData || runs.some((r) => m.known(r) > 0)).map((m) => (
           <button key={m.key} aria-pressed={m.key === metric.key} onClick={() => setMetric(m)}>
             {m.label}
           </button>
