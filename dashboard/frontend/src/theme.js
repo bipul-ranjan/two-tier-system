@@ -11,5 +11,6 @@ export const C = {
   payments: "#3D5AD0",
   retail_bank: "#0F8B8D",
   claudePrompt: "#8E44AD",  // distinct from tier2/exception/payments -- Tier 2 system prompt changes specifically
+  cache: "#5DADE2",  // served from the semantic cache -- distinct from local (teal) and real Claude calls (amber)
 };
 export const unitColor = (u) => C[u] ?? "#7A8894";

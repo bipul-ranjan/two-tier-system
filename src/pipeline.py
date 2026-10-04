@@ -45,6 +45,7 @@ from .tier1 import ask_tier1
 from .router import route
 from .tier2_escalate import ask_tier2, estimate_cost, client as anthropic_client
 from .quality import judge_answer_quality, judge_answer_quality_local, QUALITY_DIMS
+from .semantic_cache import SemanticCacheIndex, try_semantic_cache
 
 # Whole-file exclusive locking so results_history.csv cannot be opened elsewhere
 # (Excel, a text editor) for the whole duration of a run -- not just checked once
@@ -64,20 +65,47 @@ SEED = None  # None = different random rows every run; set an int to reproduce a
 # and can be set separately for normal vs. exception rows within a unit -- edit the
 # values below to whatever your data supports. A unit not listed here, or a run whose
 # rows have no business_unit match, falls back to DEFAULT_THRESHOLD.
-THRESHOLDS = {
-    "payments": {"normal": 0.7, "exception": 0.7},
-    # 0.55 is a suggested starting point, not a measured optimum: it sits just above
-    # retail_bank's own mean/median confidence (0.529 / 0.527 in the latest run), the
-    # same relationship 0.7 already has to payments' mean (0.700). Re-tune from the
-    # Overview page once you have more runs at this setting.
-    "retail_bank": {"normal": 0.55, "exception": 0.55},
-}
 DEFAULT_THRESHOLD = 0.7
 
+# Per-category, not just per-unit or per-exception-flag: confidence genuinely differs by
+# category, not just by business unit -- e.g. PAYMENT_EXCEPTION's own 30th-percentile
+# confidence (0.674) sits well below CARD's (0.717), even though both are "payments". A
+# single normal/exception split lumps CARD/ATM/FEES/TRANSFER together despite that real
+# spread. category is known from the query itself before Tier 1 ever answers it -- unlike
+# a random perturbation around the threshold, this genuinely conditions the decision on the
+# query, at zero added cost (a dict lookup, not a model call).
+#
+# Computed as the 30th percentile of tier1_confidence_avg within each category, from the
+# live results_history.csv (the same equation as the single-threshold version: tau =
+# F^-1(1-p*), just applied per-category instead of per-unit). Recompute whenever the
+# underlying model changes significantly -- these are a snapshot, not a fixed constant,
+# exactly like the single-threshold version they replace.
+THRESHOLDS = {
+    "payments": {
+        "ATM": 0.697, "CARD": 0.717, "FEES": 0.681, "PAYMENT_EXCEPTION": 0.674, "TRANSFER": 0.730,
+    },
+    "retail_bank": {
+        "ACCOUNT": 0.575, "CONTACT": 0.542, "FIND": 0.554, "LOAN": 0.560, "PASSWORD": 0.627, "RETAIL_EXCEPTION": 0.556,
+    },
+}
 
-def get_threshold(business_unit: str, is_exception: bool) -> float:
-    scenario = "exception" if is_exception else "normal"
-    return THRESHOLDS.get(business_unit, {}).get(scenario, DEFAULT_THRESHOLD)
+
+def get_threshold(business_unit: str, is_exception: bool, category: str = None) -> float:
+    """category, when given, looks up the per-category threshold directly -- the real
+    query-content signal. is_exception is kept as a fallback path (averaging the unit's own
+    exception/normal categories) for any caller that doesn't have category available, so
+    this stays backward compatible rather than silently changing behavior for existing
+    callers that haven't been updated to pass it.
+    """
+    unit_thresholds = THRESHOLDS.get(business_unit, {})
+    if category is not None and category in unit_thresholds:
+        return unit_thresholds[category]
+    if not unit_thresholds:
+        return DEFAULT_THRESHOLD
+    exception_cats = [c for c in unit_thresholds if c in EXCEPTION_CATEGORIES]
+    normal_cats = [c for c in unit_thresholds if c not in EXCEPTION_CATEGORIES]
+    cats = exception_cats if is_exception and exception_cats else normal_cats or list(unit_thresholds)
+    return sum(unit_thresholds[c] for c in cats) / len(cats)
 
 # How long Ollama keeps a model loaded after each request during a run. Finite on
 # purpose: if the script is killed hard (so it can't unload), the models still free
@@ -292,8 +320,9 @@ def unload_models(models: list) -> None:
             print(f"Warning: could not unload {m}: {e}")
 
 
-def process_query(query: str, business_unit: str, category: str, intent: str, is_exception: bool, run_id: str) -> dict:
-    threshold = get_threshold(business_unit, is_exception)
+def process_query(query: str, business_unit: str, category: str, intent: str, is_exception: bool, run_id: str,
+                   cache_index: SemanticCacheIndex = None) -> dict:
+    threshold = get_threshold(business_unit, is_exception, category=category)
 
     start_dt = datetime.now()
     t_query_start = time.perf_counter()
@@ -340,20 +369,39 @@ def process_query(query: str, business_unit: str, category: str, intent: str, is
         "tier2_prompt_version": None,
         "estimated_cost_usd": 0.0,
         "final_answer": t1_result["answer"],
+        "cache_hit": False,
+        "cache_similarity": None,
+        "cache_path": None,  # "direct" when cache_hit is True (always "direct" now -- the gray-zone
+                             # verification path was removed; see src/semantic_cache.py)
+        "cache_matched_query": None,
     }
 
     tier2_latency_ms = None
     if decision == "ESCALATE":
-        t2_start = time.perf_counter()
-        t2_result = ask_tier2(query, business_unit=business_unit)
-        tier2_latency_ms = (time.perf_counter() - t2_start) * 1000
-        row["tier2_latency_ms"] = round(tier2_latency_ms, 1)
-        row["tier2_input_tokens"] = t2_result["input_tokens"]
-        row["tier2_output_tokens"] = t2_result["output_tokens"]
-        row["tier2_confidence"] = t2_result["confidence"]
-        row["tier2_prompt_version"] = t2_result["prompt_version"]
-        row["estimated_cost_usd"] = estimate_cost(t2_result["input_tokens"], t2_result["output_tokens"])
-        row["final_answer"] = t2_result["answer"]
+        cache_result = try_semantic_cache(cache_index, query, category=category, intent=intent) \
+            if cache_index is not None else None
+        if cache_result is not None:
+            # Served from the semantic cache -- no Tier 2 call, no cost, and (for a "direct"
+            # hit) no extra latency beyond the cache lookup itself. decision stays "ESCALATE"
+            # (Tier 1 still wasn't confident enough to answer alone) so existing LOCAL/ESCALATE
+            # analysis keeps working unchanged; cache_hit/cache_path are the new, additive
+            # fields that distinguish "served from cache" from "actually called Claude".
+            row["cache_hit"] = True
+            row["cache_similarity"] = round(cache_result["similarity"], 4)
+            row["cache_path"] = cache_result["path"]
+            row["cache_matched_query"] = cache_result["matched_query"]
+            row["final_answer"] = cache_result["answer"]
+        else:
+            t2_start = time.perf_counter()
+            t2_result = ask_tier2(query, business_unit=business_unit)
+            tier2_latency_ms = (time.perf_counter() - t2_start) * 1000
+            row["tier2_latency_ms"] = round(tier2_latency_ms, 1)
+            row["tier2_input_tokens"] = t2_result["input_tokens"]
+            row["tier2_output_tokens"] = t2_result["output_tokens"]
+            row["tier2_confidence"] = t2_result["confidence"]
+            row["tier2_prompt_version"] = t2_result["prompt_version"]
+            row["estimated_cost_usd"] = estimate_cost(t2_result["input_tokens"], t2_result["output_tokens"])
+            row["final_answer"] = t2_result["answer"]
 
     total_latency_ms = (time.perf_counter() - t_query_start) * 1000
     row["total_latency_ms"] = round(total_latency_ms, 1)
@@ -425,9 +473,17 @@ def score_quality_pass_local(rows: list, judge_model: str) -> None:
             print(f"  {i}/{len(rows)} scored")
 
 
-def run_pipeline(sample: pd.DataFrame, log_path: str = None, score_quality: bool = False, score_quality_local: str = None) -> pd.DataFrame:
+def run_pipeline(sample: pd.DataFrame, log_path: str = None, score_quality: bool = False, score_quality_local: str = None,
+                  use_semantic_cache: bool = False) -> pd.DataFrame:
     """Run every sampled row through the cascade. Writes one combined log
     (read by evaluate.py) plus one log per business unit.
+
+    use_semantic_cache: opt-in (default off) since, unlike score_quality/score_quality_local,
+    this changes live ROUTING behaviour, not just logging -- an escalated query may now be
+    served from a cached prior Claude answer instead of making a fresh Tier 2 call. Builds
+    the cache index once, from results_history.csv as it stands at the start of this run (so
+    cache entries only ever come from genuinely earlier runs' Tier 2 answers, never from rows
+    being written during this same run).
     """
     if log_path is None:
         log_path = f"{LOGS_DIR}/results_log_combined.csv"
@@ -445,15 +501,34 @@ def run_pipeline(sample: pd.DataFrame, log_path: str = None, score_quality: bool
     # a text editor, a second run of the pipeline) can open it in the meantime.
     with HistoryLock(HISTORY_PATH) as lock:
         print(f"Locked {HISTORY_PATH} -- it can't be opened elsewhere until this run finishes.")
+        cache_index = None
+        if use_semantic_cache:
+            print("Building semantic cache index from existing Tier 2 answers...")
+            cache_index = SemanticCacheIndex()
+            cache_index.build(lock.read())
+            print(f"  {len(cache_index.queries)} cached Tier 2 answers available.")
         try:
             print("Preloading models...")
             load_models(models)
             warn_if_not_resident(models)
             print("-" * 60)
-            rows = [
-                process_query(r.instruction, r.business_unit, r.category, r.intent, bool(r.is_exception), run_id)
-                for r in sample.itertuples(index=False)
-            ]
+            # One row's irrecoverable failure (e.g. Ollama hanging well past its retries in
+            # tier1.py) no longer takes the whole batch down -- it's logged and skipped, and
+            # every other row still completes and gets saved. Before this, a single bad row
+            # late in a multi-hundred-row run meant losing every row that had already
+            # succeeded, since nothing is written to disk until the whole loop finishes.
+            rows = []
+            failed = []
+            for r in sample.itertuples(index=False):
+                try:
+                    rows.append(process_query(r.instruction, r.business_unit, r.category, r.intent, bool(r.is_exception), run_id,
+                                               cache_index=cache_index))
+                except Exception as e:
+                    failed.append({"query": r.instruction, "business_unit": r.business_unit, "error": str(e)})
+                    print(f"  WARNING: row failed and will be skipped ({type(e).__name__}: {e})")
+            if failed:
+                print(f"\n{len(failed)} of {len(sample)} rows failed and were skipped (see warnings above). "
+                      f"The other {len(rows)} rows completed normally and will still be saved.")
         finally:
             print("Unloading models...")
             unload_models(models)
@@ -484,28 +559,34 @@ def run_pipeline(sample: pd.DataFrame, log_path: str = None, score_quality: bool
 
 def parse_cli_args(args: list) -> tuple:
     """Simple positional-or-flag parsing, kept deliberately lightweight rather than pulling
-    in argparse for a couple of options. Returns (n, score_quality_flag, local_judge_model).
+    in argparse for a few options. Returns (n, score_quality_flag, local_judge_model, use_semantic_cache).
         python -m src.pipeline 100 --score-quality
         python -m src.pipeline 100 --score-quality-local llama3.2:3b
         python -m src.pipeline 100 --score-quality --score-quality-local llama3.2:3b
+        python -m src.pipeline 100 --use-semantic-cache
     """
     score_quality_flag = "--score-quality" in args
+    use_semantic_cache = "--use-semantic-cache" in args
     local_judge_model = None
     if "--score-quality-local" in args:
         idx = args.index("--score-quality-local")
         if idx + 1 >= len(args):
             raise SystemExit("--score-quality-local needs a model name, e.g. --score-quality-local llama3.2:3b")
         local_judge_model = args[idx + 1]
-    consumed = {"--score-quality", "--score-quality-local", local_judge_model}
+    consumed = {"--score-quality", "--score-quality-local", "--use-semantic-cache", local_judge_model}
     positional = [a for a in args if a not in consumed]
     n = int(positional[0]) if positional else N_SAMPLES
-    return n, score_quality_flag, local_judge_model
+    return n, score_quality_flag, local_judge_model, use_semantic_cache
 
 
 if __name__ == "__main__":
-    n, score_quality_flag, local_judge_model = parse_cli_args(sys.argv[1:])
+    n, score_quality_flag, local_judge_model, use_semantic_cache_flag = parse_cli_args(sys.argv[1:])
     if score_quality_flag:
         print(f"Quality scoring is ON: every one of the {n} rows will get an extra Claude API call after processing.")
     if local_judge_model:
         print(f"Local quality first-pass is ON via {local_judge_model}: cheap/free, but not the numbers to report -- see scripts/compare_quality_judges.py.")
-    run_pipeline(load_random_sample(n), score_quality=score_quality_flag, score_quality_local=local_judge_model)
+    if use_semantic_cache_flag:
+        print("Semantic cache is ON: escalations will first check for a close-enough past Claude answer before calling Claude again. "
+              "On a brand-new project (no results_history.csv yet), the cache starts empty -- expect 0 hits until there's real history to draw from.")
+    run_pipeline(load_random_sample(n), score_quality=score_quality_flag, score_quality_local=local_judge_model,
+                 use_semantic_cache=use_semantic_cache_flag)

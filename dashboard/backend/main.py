@@ -83,6 +83,9 @@ def normalize(df):
     out["cost"] = num(df, "estimated_cost_usd").fillna(0.0)
     out["claude_conf"] = num(df, "tier2_confidence")   # Claude's own self-reported confidence (escalated rows only)
     out["claude_prompt_version"] = col(df, "tier2_prompt_version")   # which Tier 2 system prompt was in effect (escalated rows only)
+    # cache_hit, logged as the string "True"/"False" like is_exception, not an actual bool column
+    out["cache_hit"] = col(df, "cache_hit").map(lambda v: str(v).strip().lower() == "true")
+    out["cache_similarity"] = num(df, "cache_similarity")
     out["quality_overall"] = num(df, "quality_overall")  # Claude-as-judge answer quality (1-5), where scored
     out["quality_local_overall"] = num(df, "quality_local_overall")  # local-SLM-as-judge (cheap first pass, separate judge)
     for dim in ("correctness", "completeness", "tone", "safety", "clarity"):
@@ -133,6 +136,19 @@ def metrics(g):
         "escalated": int(esc.sum()),
         "local_pct": 100.0 * local.sum() / n if n else None,
         "escalated_pct": 100.0 * esc.sum() / n if n else None,
+        # decision stays "ESCALATE" for a cache hit (Tier 1 still wasn't confident enough on
+        # its own) -- escalated_pct above is therefore "needed escalation", not "called
+        # Claude". These three split that correctly: claude_pct is the corrected real-call
+        # number, cache_pct is what the cache actually saved, and cache_hit_rate is specifically
+        # "of the queries that needed escalation, what fraction were served from cache" -- the
+        # number that answers "is the cache pulling its weight," independent of how the
+        # confidence threshold itself is performing.
+        "cache_hits": int((esc & g["cache_hit"]).sum()),
+        "claude_calls": int((esc & ~g["cache_hit"]).sum()),
+        "cache_pct": 100.0 * (esc & g["cache_hit"]).sum() / n if n else None,
+        "claude_pct": 100.0 * (esc & ~g["cache_hit"]).sum() / n if n else None,
+        "cache_hit_rate": 100.0 * (esc & g["cache_hit"]).sum() / esc.sum() if esc.sum() else None,
+        "avg_cache_similarity": g.loc[esc & g["cache_hit"], "cache_similarity"].mean() if (esc & g["cache_hit"]).any() else None,
         "avg_conf": g["conf"].mean(),
         "avg_conf_min": g["conf_min"].mean(),
         # Splitting average confidence by what happened to the query is more useful than one

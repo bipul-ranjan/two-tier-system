@@ -25,12 +25,22 @@ Part of the src/ package -- run from the project root with:
 import json
 import math
 import os
+import time
 import requests
 from datetime import datetime
 
 from .config import OLLAMA_URL, DEFAULT_BUSINESS_UNIT, get_unit_config
 
 PROMPTS_FILE = "prompts/business_unit_prompts.json"
+
+# A hung/overloaded Ollama (GPU contention, background Windows/OneDrive activity, etc.) can
+# cause a single request to time out well past what a normal response ever takes (typically a
+# few seconds, per the pipeline's own latency logs) -- 120s gives real headroom before treating
+# that as a failure, and retrying gives a genuinely hung request a chance to clear rather than
+# taking down an entire multi-hundred-row run over one slow call.
+OLLAMA_TIMEOUT_S = 120
+OLLAMA_MAX_RETRIES = 3
+OLLAMA_RETRY_DELAY_S = 5
 
 PROMPT_TEMPLATE = """You are the {assistant_name} for a retail bank. Answer the customer's query directly, clearly, and completely.
 {additional_instructions}
@@ -79,9 +89,21 @@ def ask_tier1(query: str, business_unit: str = DEFAULT_BUSINESS_UNIT, keep_alive
     if keep_alive is not None:
         payload["keep_alive"] = keep_alive
 
-    resp = requests.post(OLLAMA_URL, json=payload, timeout=60)
-    resp.raise_for_status()
-    data = resp.json()
+    data = None
+    last_error = None
+    for attempt in range(1, OLLAMA_MAX_RETRIES + 1):
+        try:
+            resp = requests.post(OLLAMA_URL, json=payload, timeout=OLLAMA_TIMEOUT_S)
+            resp.raise_for_status()
+            data = resp.json()
+            break
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            last_error = e
+            if attempt < OLLAMA_MAX_RETRIES:
+                print(f"    WARNING: Ollama request failed (attempt {attempt}/{OLLAMA_MAX_RETRIES}): {e} -- retrying in {OLLAMA_RETRY_DELAY_S}s...")
+                time.sleep(OLLAMA_RETRY_DELAY_S)
+    if data is None:
+        raise RuntimeError(f"Ollama did not respond for model '{model}' after {OLLAMA_MAX_RETRIES} attempts: {last_error}") from last_error
 
     answer = data["response"].strip()
     confidence_avg = compute_confidence_avg(data)

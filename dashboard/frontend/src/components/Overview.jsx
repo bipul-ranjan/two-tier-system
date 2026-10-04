@@ -53,6 +53,12 @@ export default function Overview({ runs }) {
   const totalEscalated = sum(runs, "escalated");
   const totalCost = sum(runs, "tier2_cost_usd");
   const totalClaudeKnown = sum(runs, "claude_conf_known");
+  // decision stays "ESCALATE" on a cache hit (Tier 1 still wasn't confident enough alone), so
+  // `escalated` alone conflates "needed escalation" with "actually called Claude" -- these two
+  // split it correctly. claude_calls is a strict correction of escalated (equal to it whenever
+  // the cache isn't in use, since cache_hits is then always 0).
+  const totalCacheHits = sum(runs, "cache_hits");
+  const totalClaudeCalls = sum(runs, "claude_calls");
 
   const avgConf = weightedMean(runs, "avg_conf", "rows");
   const avgLocalConf = weightedMean(runs, "avg_local_conf", "local");
@@ -71,8 +77,9 @@ export default function Overview({ runs }) {
       <section className="section first">
         <p className="readout">
           Across <strong>{runs.length}</strong> {runs.length === 1 ? "run" : "runs"} and <strong>{totalRows}</strong> total queries,{" "}
-          <strong>{fmtPct((totalLocal / totalRows) * 100)}</strong> were answered locally and{" "}
-          <strong>{fmtPct((totalEscalated / totalRows) * 100)}</strong> went to Claude.
+          <strong>{fmtPct((totalLocal / totalRows) * 100)}</strong> were answered locally
+          {totalCacheHits > 0 ? <>, <strong>{fmtPct((totalCacheHits / totalRows) * 100)}</strong> were served from the cache</> : ""} and{" "}
+          <strong>{fmtPct((totalClaudeCalls / totalRows) * 100)}</strong> actually went to Claude.
         </p>
         <p className="readout-sub">
           {avgLocalConf != null ? `Local answers averaged ${fmtConf(avgLocalConf)} confidence` : ""}
@@ -91,6 +98,10 @@ export default function Overview({ runs }) {
           <Kpi label="Local confidence" value={fmtConf(avgLocalConf)} sub="answers kept on-device" />
           <Kpi label="Claude confidence" value={fmtConf(avgClaudeConf)} sub={totalClaudeKnown ? `${totalClaudeKnown} self-rated answers` : "not recorded yet"} />
           <Kpi label="Total Claude spend" value={fmtUsd(totalCost)} sub="all runs combined" />
+          {totalEscalated > 0 && (
+            <Kpi label="Cache hit rate" value={fmtPct((totalCacheHits / totalEscalated) * 100)}
+                 sub={`${totalCacheHits} of ${totalEscalated} escalation-eligible queries, avg similarity ${weightedMean(runs, "avg_cache_similarity", "cache_hits")?.toFixed(3) ?? "-"}`} />
+          )}
         </div>
         <p className="lede" style={{ marginTop: 18 }}>
           Answer quality, split by which model actually produced the answer -- Payments and Retail bank only when they answered locally, Claude only on

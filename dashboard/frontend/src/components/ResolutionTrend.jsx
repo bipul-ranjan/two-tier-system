@@ -49,7 +49,15 @@ export default function ResolutionTrend({ runs, selectedId }) {
           return {
             id: r.run_id,
             local_pct: r.units[u]?.local_pct ?? null,
+            // escalated_pct ("needed escalation") is kept available for the tooltip/debugging
+            // but is no longer what's plotted -- decision stays "ESCALATE" on a cache hit, so
+            // this alone can't distinguish "served from cache" from "actually called Claude".
+            // cache_pct + claude_pct (which sum to escalated_pct) are the two stacked areas now.
             escalated_pct: r.units[u]?.escalated_pct ?? null,
+            cache_pct: r.units[u]?.cache_pct ?? null,
+            claude_pct: r.units[u]?.claude_pct ?? null,
+            cache_hit_rate: r.units[u]?.cache_hit_rate ?? null,
+            avg_cache_similarity: r.units[u]?.avg_cache_similarity ?? null,
             model: thisModel,
             threshold: thisThreshold,
             thresholdPct: thresholds.length === 1 ? thresholds[0] * 100 : null,
@@ -97,17 +105,22 @@ export default function ResolutionTrend({ runs, selectedId }) {
                         <div className="chart-tooltip">
                           <div className="chart-tooltip-title">{runLabel(label)}</div>
                           <div>answered locally: {fmtPct(d.local_pct, 0)}</div>
-                          <div>sent to Claude: {fmtPct(d.escalated_pct, 0)}</div>
+                          <div>served from cache: {fmtPct(d.cache_pct, 0)}</div>
+                          <div>sent to Claude: {fmtPct(d.claude_pct, 0)}</div>
                           <div className="chart-tooltip-sub">model: {d.model ?? "-"}</div>
                           <div className="chart-tooltip-sub">threshold: {d.threshold}</div>
                           <div className="chart-tooltip-sub">Claude prompt: {d.promptVersion ?? "-"}</div>
+                          {d.cache_hit_rate != null && (
+                            <div className="chart-tooltip-sub">cache hit rate (of escalations): {fmtPct(d.cache_hit_rate, 0)}, avg similarity {d.avg_cache_similarity?.toFixed(3) ?? "-"}</div>
+                          )}
                         </div>
                       );
                     }}
                   />
-                  <Legend formatter={(n) => (n === "local_pct" ? "answered locally" : n === "escalated_pct" ? "sent to Claude" : "threshold")} />
+                  <Legend formatter={(n) => (n === "local_pct" ? "answered locally" : n === "cache_pct" ? "served from cache" : n === "claude_pct" ? "sent to Claude" : "threshold")} />
                   <Area type="monotone" dataKey="local_pct" stackId="r" stroke={C.local} fill={C.local} fillOpacity={0.55} isAnimationActive={false} connectNulls />
-                  <Area type="monotone" dataKey="escalated_pct" stackId="r" stroke={C.escalated} fill={C.escalated} fillOpacity={0.5} isAnimationActive={false} connectNulls />
+                  <Area type="monotone" dataKey="cache_pct" stackId="r" stroke={C.cache} fill={C.cache} fillOpacity={0.55} isAnimationActive={false} connectNulls />
+                  <Area type="monotone" dataKey="claude_pct" stackId="r" stroke={C.escalated} fill={C.escalated} fillOpacity={0.5} isAnimationActive={false} connectNulls />
                   <Line type="stepAfter" dataKey="thresholdPct" stroke={C.exception} strokeWidth={1.75} strokeDasharray="4 3" dot={false} activeDot={false} isAnimationActive={false} connectNulls legendType="line" />
                 </ComposedChart>
               </ResponsiveContainer>
