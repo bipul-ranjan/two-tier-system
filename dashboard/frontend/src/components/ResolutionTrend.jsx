@@ -49,10 +49,8 @@ export default function ResolutionTrend({ runs, selectedId }) {
           return {
             id: r.run_id,
             local_pct: r.units[u]?.local_pct ?? null,
-            // escalated_pct ("needed escalation") is kept available for the tooltip/debugging
-            // but is no longer what's plotted -- decision stays "ESCALATE" on a cache hit, so
-            // this alone can't distinguish "served from cache" from "actually called Claude".
-            // cache_pct + claude_pct (which sum to escalated_pct) are the two stacked areas now.
+            // escalated_pct ("needed escalation") is cache_pct + claude_pct; the chart stacks
+            // those two, so "served from cache" and "actually called Claude" show separately.
             escalated_pct: r.units[u]?.escalated_pct ?? null,
             cache_pct: r.units[u]?.cache_pct ?? null,
             claude_pct: r.units[u]?.claude_pct ?? null,

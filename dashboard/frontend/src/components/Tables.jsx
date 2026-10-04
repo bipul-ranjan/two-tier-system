@@ -64,7 +64,7 @@ export function ScenarioTable({ rows }) {
             <tr key={r.type}>
               <td>{r.type}</td>
               <td className="num">{r.rows}</td>
-              <td><Meter pct={r.escalated_pct} /></td>
+              <td><Meter pct={r.claude_pct} /></td>
               <td className="num">{fmtConf(r.avg_local_conf)}</td>
               <td className="num">{r.claude_conf_known > 0 ? fmtConf(r.avg_claude_conf) : "-"}</td>
             </tr>
@@ -140,8 +140,8 @@ export function RecentTable({ rows }) {
               </td>
               <td className="num">{fmtConf(r.conf)}</td>
               <td>
-                <span className={`pill ${r.decision === "LOCAL" ? "pill-local" : "pill-esc"}`}>
-                  {r.decision === "LOCAL" ? "answered locally" : "sent to Claude"}
+                <span className={`pill ${r.decision === "LOCAL" ? "pill-local" : r.decision === "CACHE" ? "pill-cache" : "pill-esc"}`}>
+                  {r.decision === "LOCAL" ? "answered locally" : r.decision === "CACHE" ? "served from cache" : "sent to Claude"}
                 </span>
               </td>
               <td className="num">{fmtMs(r.total_ms)}</td>

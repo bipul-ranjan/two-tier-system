@@ -360,11 +360,13 @@ def process_query(query: str, business_unit: str, category: str, intent: str, is
                 # any reason, treat it as a miss and escalate normally rather than losing the row.
                 print(f"    WARNING: cache lookup failed ({type(e).__name__}: {e}) -- treating as a miss")
         if cache_result is not None:
-            # Served from the semantic cache -- no Tier 2 call, no cost, and (for a "direct"
-            # hit) no extra latency beyond the cache lookup itself. decision stays "ESCALATE"
-            # (Tier 1 still wasn't confident enough to answer alone) so existing LOCAL/ESCALATE
-            # analysis keeps working unchanged; cache_hit/cache_path are the new, additive
-            # fields that distinguish "served from cache" from "actually called Claude".
+            # Served from the semantic cache -- no Tier 2 call, no cost, and no extra latency
+            # beyond the cache lookup itself. The router said ESCALATE (Tier 1 wasn't confident
+            # enough to answer alone), but nothing was actually escalated, so the logged
+            # decision is CACHE: every row is exactly one of LOCAL (Tier 1 answered), CACHE
+            # (a past Claude answer was re-served) or ESCALATE (Claude was called).
+            row["decision"] = "CACHE"
+            print(f"Cache hit      : similarity {cache_result['similarity']:.4f} -> decision CACHE (no Claude call)")
             row["cache_hit"] = True
             row["cache_similarity"] = round(cache_result["similarity"], 4)
             row["cache_path"] = cache_result["path"]
@@ -424,6 +426,41 @@ def score_quality_pass(rows: list) -> None:
             row["quality_note"] = None
         if i % 10 == 0 or i == len(rows):
             print(f"  {i}/{len(rows)} scored")
+
+
+def score_draft_pass(rows: list) -> None:
+    """Fill quality_draft_* on EVERY row, so no quality cell is left blank. This is what each
+    row's Tier 1 answer was worth:
+      - LOCAL rows: Tier 1's answer IS the final answer, so the draft scores are simply a copy
+        of the final-answer scores -- no extra judge call.
+      - ESCALATE and CACHE rows (fresh Claude answer, or a cached one): Tier 1's answer was discarded, so
+        tier1_answer gets its own judge call -- a same-query comparison against the quality of
+        the answer the customer actually received (quality_*).
+    Runs after score_quality_pass, since LOCAL rows copy from its output.
+    """
+    escalated = [r for r in rows if r["decision"] in ("ESCALATE", "CACHE")]   # Tier 1's draft was discarded on both
+    print(f"\nFilling Tier 1 quality on every row: copying final-answer scores onto {len(rows) - len(escalated)} local rows, "
+          f"scoring the discarded Tier 1 draft on {len(escalated)} escalated rows...")
+    for row in rows:
+        if row["decision"] == "LOCAL":
+            for dim in QUALITY_DIMS:
+                row[f"quality_draft_{dim}"] = row.get(f"quality_{dim}")
+            row["quality_draft_overall"] = row.get("quality_overall")
+            row["quality_draft_note"] = row.get("quality_note")
+    for i, row in enumerate(escalated, 1):
+        result = judge_answer_quality(anthropic_client, row["query"], row["tier1_answer"])
+        if result:
+            for dim in QUALITY_DIMS:
+                row[f"quality_draft_{dim}"] = result[dim]
+            row["quality_draft_overall"] = round(sum(result[d] for d in QUALITY_DIMS) / len(QUALITY_DIMS), 2)
+            row["quality_draft_note"] = result["note"]
+        else:
+            for dim in QUALITY_DIMS:
+                row[f"quality_draft_{dim}"] = None
+            row["quality_draft_overall"] = None
+            row["quality_draft_note"] = None
+        if i % 10 == 0 or i == len(escalated):
+            print(f"  {i}/{len(escalated)} drafts scored")
 
 
 def score_quality_pass_local(rows: list, judge_model: str) -> None:
@@ -527,13 +564,14 @@ def run_pipeline(sample: pd.DataFrame, log_path: str = None, score_quality: bool
         # rows scored so far keep their scores, the rest stay blank, and the run is saved either
         # way. scripts/backfill_quality_scores.py is idempotent and finishes whatever is blank.
         for scoring_pass in ([lambda: score_quality_pass_local(rows, score_quality_local)] if score_quality_local else []) + \
-                            ([lambda: score_quality_pass(rows)] if score_quality else []):
+                            ([lambda: score_quality_pass(rows), lambda: score_draft_pass(rows)] if score_quality else []):
             try:
                 scoring_pass()
             except (Exception, KeyboardInterrupt) as e:
                 print(f"\n  WARNING: quality scoring stopped early ({type(e).__name__}: {e}).")
-                print("  The run itself is being saved anyway. To score whatever is still blank, run:")
+                print("  The run itself is being saved anyway. To fill in whatever is still blank, run both:")
                 print("      python scripts/backfill_quality_scores.py")
+                print("      python scripts/backfill_quality_scores.py --draft")
                 break
 
         df = pd.DataFrame(rows)
@@ -592,7 +630,9 @@ def main(argv=None) -> None:
         print("Semantic cache: OFF (--nocache). Every escalation will call Claude.")
     if score_quality:
         print(f"Quality evaluation: ON (default). After processing, every one of the {n} rows' final answers -- whether "
-              f"answered by Tier 1, served from the cache, or answered by Tier 2 -- gets one Claude judge call. Pass --noquality to skip.")
+              f"answered by Tier 1, served from the cache, or answered by Tier 2 -- gets one Claude judge call, and every "
+              f"escalated row's discarded Tier 1 draft gets one more (local rows just copy their final-answer scores), "
+              f"so no quality cell is left blank. Pass --noquality to skip.")
     else:
         print("Quality evaluation: OFF (--noquality). Rows are saved with blank quality columns; "
               "run scripts/backfill_quality_scores.py to fill them in later.")

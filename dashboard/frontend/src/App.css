@@ -11,6 +11,9 @@
   --escalated-ink: #7a5200;
   --tier2: #3d3b8e;
   --exception: #c2185b;
+  --cache: #5dade2;
+  --cache-tint: #dbeefa;
+  --cache-ink: #1b5c86;
 }
 
 * { box-sizing: border-box; }
@@ -93,6 +96,7 @@ code, .code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; f
 .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 500; white-space: nowrap; }
 .pill-local { background: var(--local-tint); color: #0a5e60; }
 .pill-esc { background: var(--escalated-tint); color: var(--escalated-ink); }
+.pill-cache { background: var(--cache-tint); color: var(--cache-ink); }
 
 /* charts */
 .chart { width: 100%; }

@@ -53,10 +53,9 @@ export default function Overview({ runs }) {
   const totalEscalated = sum(runs, "escalated");
   const totalCost = sum(runs, "tier2_cost_usd");
   const totalClaudeKnown = sum(runs, "claude_conf_known");
-  // decision stays "ESCALATE" on a cache hit (Tier 1 still wasn't confident enough alone), so
-  // `escalated` alone conflates "needed escalation" with "actually called Claude" -- these two
-  // split it correctly. claude_calls is a strict correction of escalated (equal to it whenever
-  // the cache isn't in use, since cache_hits is then always 0).
+  // `escalated` = "needed escalation" (cache hits + real Claude calls). The decision column
+  // splits it: CACHE rows are cache_hits, ESCALATE rows are claude_calls. With no cache in use,
+  // cache_hits is 0 and claude_calls equals escalated.
   const totalCacheHits = sum(runs, "cache_hits");
   const totalClaudeCalls = sum(runs, "claude_calls");
 

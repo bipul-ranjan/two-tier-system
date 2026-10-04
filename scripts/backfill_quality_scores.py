@@ -15,9 +15,10 @@ for an escalated row, the local model's answer otherwise). Pass --draft to inste
 tier1_answer -- the local model's DISCARDED draft, which only differs from final_answer on
 escalated rows. This is how you get a genuine "what would the local model have said, judged
 the same way as what Claude actually said" comparison, using data you already have (no new
-generation needed) -- writes separate quality_draft_* columns, and is automatically restricted
-to escalated rows (on a local row, the draft IS the final answer, so scoring it again would
-just duplicate quality_overall for no reason).
+generation needed) -- writes separate quality_draft_* columns. Escalated rows get a judge call;
+local rows just COPY their final-answer scores (on a local row the draft IS the final answer, so
+a second judge call would only duplicate quality_overall) -- free, and it means no row is left
+with blank quality cells. Run the default backfill first, so local rows have a final score to copy.
 
 Only scores rows missing a value for whichever judge/column-set you're running, so this is
 safe to re-run (e.g. after a partial run, or after adding more history) -- already-scored rows
@@ -26,7 +27,7 @@ are left untouched, not re-scored and not re-billed.
 Run from the project root:
     python scripts/backfill_quality_scores.py                       # Claude, needs ANTHROPIC_API_KEY
     python scripts/backfill_quality_scores.py --judge-local llama3.2:3b   # local, needs Ollama running
-    python scripts/backfill_quality_scores.py --draft                # Claude judges the local draft (escalated rows only)
+    python scripts/backfill_quality_scores.py --draft                # Claude judges escalated drafts; local rows copy their final scores
     python scripts/backfill_quality_scores.py --unit retail_bank --run run-29-Sep-26-09:44
     python scripts/backfill_quality_scores.py --limit 200            # cap how many rows this pass
 """
@@ -47,10 +48,32 @@ def quality_cols(prefix: str) -> list:
 
 
 def ensure_cols(df: pd.DataFrame, cols: list) -> pd.DataFrame:
+    """Make sure every quality column exists with a dtype that can hold what gets written into
+    it: scores are float, notes are text. This matters because newer pandas refuses a text note
+    in a float column (an all-blank column reads back from CSV as float) and refuses an object
+    array assigned into a float column (which is what happens when scores move between the
+    history frame and the combined/per-unit frames), so dtypes are kept consistent from the start
+    rather than coerced ad hoc where a write happens to fail."""
     for col in cols:
+        is_note = col.endswith("note")
         if col not in df.columns:
-            df[col] = None
+            df[col] = None if is_note else float("nan")
+        if is_note:
+            df[col] = df[col].astype(object)
     return df
+
+
+def copy_final_to_draft(df: pd.DataFrame, final_prefix: str, draft_prefix: str, base_mask) -> int:
+    """LOCAL rows: Tier 1's draft IS the final answer, so its draft scores are just a copy of
+    the final-answer scores -- free, no judge call. Fills only where the draft is blank and the
+    final score exists (a row whose final score is itself blank has nothing to copy yet; run the
+    default backfill first). Edits df in place; returns how many rows were filled."""
+    draft_cols, final_cols = quality_cols(draft_prefix), quality_cols(final_prefix)
+    ensure_cols(df, draft_cols + final_cols)
+    m = base_mask & (df["decision"] == "LOCAL") & df[f"{draft_prefix}overall"].isna() & df[f"{final_prefix}overall"].notna()
+    for draft_col, final_col in zip(draft_cols, final_cols):
+        df.loc[m, draft_col] = df.loc[m, final_col]
+    return int(m.sum())
 
 
 def score_missing(df: pd.DataFrame, prefix: str, judge_label: str, judge_one, limit, use_draft: bool) -> tuple:
@@ -102,7 +125,8 @@ def main():
                      help="score with this local Ollama model instead of Claude, writing quality_local_* columns")
     ap.add_argument("--draft", action="store_true",
                      help="score the local model's discarded draft (tier1_answer) instead of final_answer -- "
-                          "writes quality_draft_* columns, auto-restricted to escalated rows")
+                          "writes quality_draft_* columns: escalated rows get a judge call, local rows copy their "
+                          "final-answer scores for free (their draft IS the final answer)")
     args = ap.parse_args()
 
     if args.judge_local:
@@ -131,28 +155,33 @@ def main():
             mask &= history["business_unit"] == args.unit
         if args.run:
             mask &= history["run_id"] == args.run
+        base_mask = mask.copy()   # unit/run filters only -- the local-row copy below uses this
         if args.draft:
             # on a local row, tier1_answer IS final_answer -- scoring it again would just
             # duplicate quality_overall for no reason, so --draft only ever applies here.
             n_before = mask.sum()
-            mask &= history["decision"] == "ESCALATE"
+            mask &= history["decision"].isin(["ESCALATE", "CACHE"])   # Tier 1's draft was discarded on both
             skipped = n_before - mask.sum()
             if skipped:
-                print(f"--draft: restricting to escalated rows only ({skipped} local rows excluded -- "
-                      f"their draft and final answer are identical, already scored).")
+                print(f"--draft: judging escalated rows only ({skipped} local rows need no judge call -- "
+                      f"their draft and final answer are identical, so their scores are copied instead).")
+
+        n_copied = copy_final_to_draft(history, prefix.replace("draft_", ""), prefix, base_mask) if args.draft else 0
+        if n_copied:
+            print(f"Copied final-answer scores onto {n_copied} local rows (their draft IS the final answer; no judge call).")
 
         subset = history[mask]
         rest = history[~mask]
         scored_subset, n_scored = score_missing(subset, prefix, judge_label, judge_one, args.limit, args.draft)
         history = pd.concat([rest, scored_subset]).sort_index()
 
-        if n_scored == 0:
+        if n_scored == 0 and n_copied == 0:
             print("Nothing to score (all matching rows already have quality scores, or none matched the filters).")
         else:
             lock.write(history)
-            print(f"\nScored {n_scored} rows. Updated {HISTORY_PATH}.")
+            print(f"\nScored {n_scored} rows" + (f", copied {n_copied} local rows" if args.draft else "") + f". Updated {HISTORY_PATH}.")
 
-    if n_scored > 0 and os.path.exists(combined_path):
+    if (n_scored > 0 or n_copied > 0) and os.path.exists(combined_path):
         combined = pd.read_csv(combined_path)
         combined = ensure_cols(combined, cols)
         if "run_id" in combined.columns:

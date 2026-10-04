@@ -16,7 +16,7 @@ function StripTip({ active, payload }) {
         {p.x ? ", exception" : ""}
       </div>
       <div>
-        Confidence {fmtConf(p.c)}: {p.d === "LOCAL" ? "answered locally" : "sent to Claude"}
+        Confidence {fmtConf(p.c)}: {p.d === "LOCAL" ? "answered locally" : p.d === "CACHE" ? "served from cache" : "sent to Claude"}
       </div>
     </div>
   );
@@ -66,7 +66,7 @@ export default function ConfidenceStrip({ points, thresholds }) {
       <div className="legend">
         {single != null && (
           <>
-            <span><i className="swatch" style={{ background: C.escalated, opacity: 0.5 }} /> sent to Claude</span>
+            <span><i className="swatch" style={{ background: C.escalated, opacity: 0.5 }} /> escalated (cache or Claude)</span>
             <span><i className="swatch" style={{ background: C.local, opacity: 0.5 }} /> answered locally</span>
           </>
         )}

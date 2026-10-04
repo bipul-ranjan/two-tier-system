@@ -1,12 +1,12 @@
 """
-Runs the pipeline, then runs the two quality backfills afterwards.
+Runs the pipeline, then runs both quality backfills as a safety net.
 
-`python -m src.pipeline` now evaluates quality by default (every row's final answer -- Tier 1,
-cache, or Tier 2 -- gets one Claude judge call after processing), so step 2 below normally
-finds nothing blank and costs nothing; it exists as a safety net for any row whose judge call
-failed, or any older rows that were never scored. Step 3 is the one that still adds something
-new every time: scoring Tier 1's discarded draft on escalated rows (quality_draft_overall),
-the same-query comparison against Claude's actual answer.
+`python -m src.pipeline` already does all the quality work by default: every row's final answer
+is judged, every escalated row's discarded Tier 1 draft is judged, and local rows copy their
+final-answer scores onto the draft columns -- so no quality cell is left blank. Steps 2 and 3
+below therefore normally find nothing to do and cost nothing; they exist to catch anything a run
+couldn't finish (a failed judge call, a Ctrl+C partway through scoring) and any older rows that
+were never scored.
 
 Each step shells out to the actual script you'd run manually (src.pipeline,
 scripts/backfill_quality_scores.py), so there's no duplicated logic to drift out of sync --
@@ -39,8 +39,8 @@ def main():
         sys.exit(1)
 
     run_step(["-m", "src.pipeline"] + pipeline_args, "Step 1/3: Running the pipeline")
-    run_step(["scripts/backfill_quality_scores.py"], "Step 2/3: Catch-up backfill of final-answer quality (normally nothing left blank)")
-    run_step(["scripts/backfill_quality_scores.py", "--draft"], "Step 3/3: Backfilling draft quality (Tier 1's discarded draft, escalated rows only)")
+    run_step(["scripts/backfill_quality_scores.py"], "Step 2/3: Safety-net backfill of final-answer quality (normally nothing left blank)")
+    run_step(["scripts/backfill_quality_scores.py", "--draft"], "Step 3/3: Safety-net backfill of Tier 1 draft quality (local rows copy, escalated rows judged)")
 
     print(f"\n{'=' * 60}\nDone: pipeline run complete, both quality_overall and quality_draft_overall backfilled.\n{'=' * 60}")
 

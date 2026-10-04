@@ -123,7 +123,7 @@ export default function App() {
             <section className="section">
               <h2>Where each answer landed</h2>
               <p className="lede">
-                Each dot is one query, placed by the confidence of its local answer. Queries that fall left of the threshold line are sent to Claude.
+                Each dot is one query, placed by the confidence of its local answer. Queries that fall left of the threshold line are escalated: served from the cache when a close past answer exists, otherwise sent to Claude.
               </p>
               <ConfidenceStrip points={d.points} thresholds={d.thresholds} />
               {d.thresholds.length === 0 && (
@@ -139,7 +139,7 @@ export default function App() {
               </section>
               <section className="section">
                 <h2>Time per query</h2>
-                <p className="lede">Local answers wait only for the local model. Queries sent to Claude wait for both.</p>
+                <p className="lede">Local answers wait only for the local model. Queries sent to Claude wait for both. Cache hits wait only for the local model and the lookup.</p>
                 <LatencyChart latency={d.latency} />
                 {d.kpis.load_known > 0 && (
                   <p className="hint">
@@ -219,7 +219,7 @@ export default function App() {
               <summary>How these numbers are calculated</summary>
               <ul>
                 <li>Confidence is the geometric mean of the probabilities of the tokens in the local model's answer, taken from Ollama's log-probabilities. It shows how sure the model was of its own wording, not whether the answer is correct.</li>
-                <li>A query is answered locally when its confidence is at or above the threshold. Otherwise it is sent to Claude.</li>
+                <li>A query is answered locally when its confidence is at or above the threshold. Otherwise it is escalated: re-served from the cache if a close enough past Claude answer exists, and only sent to Claude if not.</li>
                 <li>Time is measured from the start of the query to the final answer, including the Claude call when there is one.</li>
                 <li>Claude spend is estimated from token counts and the prices set in tier2_escalate.py.</li>
                 <li>Answer quality (1-5) is a separate, offline measurement from confidence: Claude scores the actual answer text against correctness, completeness, tone, safety and clarity, after the run finishes -- automatically on every run, unless it was started with --noquality. Older rows, and rows from --noquality runs, only have a score once scripts/backfill_quality_scores.py has been run on them.</li>

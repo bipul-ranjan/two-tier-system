@@ -104,7 +104,13 @@ class SemanticCacheIndex:
         if not needed.issubset(history_df.columns):
             self.embeddings = np.zeros((0, 1))
             return
+        # Fresh Tier 2 answers only: decision == "ESCALATE" means Claude was actually called. CACHE
+        # rows are copies of an earlier Tier 2 answer already in here, and indexing them too would
+        # let a match chain (A matches B, B matches C, though A and C are far apart). The
+        # cache_hit check also covers rows logged before CACHE existed, which were ESCALATE.
         esc = history_df[(history_df["decision"] == "ESCALATE") & history_df["final_answer"].notna()]
+        if "cache_hit" in esc.columns:
+            esc = esc[~esc["cache_hit"].astype(str).str.lower().eq("true")]
         esc = esc.dropna(subset=["query"])
         if esc.empty:
             self.embeddings = np.zeros((0, 1))

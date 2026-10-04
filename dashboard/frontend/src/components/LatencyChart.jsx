@@ -6,6 +6,7 @@ export default function LatencyChart({ latency }) {
   const data = [
     { name: "Answered locally", tier1: latency.local.tier1 ?? 0, tier2: 0 },
     { name: "Sent to Claude", tier1: latency.escalated.tier1 ?? 0, tier2: latency.escalated.tier2 ?? 0 },
+    ...(latency.cache?.tier1 != null ? [{ name: "Served from cache", tier1: latency.cache.tier1, tier2: 0 }] : []),
   ];
   return (
     <div className="chart" style={{ height: 210 }}>

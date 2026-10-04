@@ -86,6 +86,10 @@ def normalize(df):
     # cache_hit, logged as the string "True"/"False" like is_exception, not an actual bool column
     out["cache_hit"] = col(df, "cache_hit").map(lambda v: str(v).strip().lower() == "true")
     out["cache_similarity"] = num(df, "cache_similarity")
+    # Every row is LOCAL (Tier 1 answered), CACHE (a past Claude answer was re-served) or
+    # ESCALATE (Claude was actually called). Cache hits logged before CACHE existed say ESCALATE
+    # with cache_hit True -- read those as CACHE too, so old and relabelled logs give the same numbers.
+    out.loc[out["decision"].eq("ESCALATE") & out["cache_hit"], "decision"] = "CACHE"
     out["quality_overall"] = num(df, "quality_overall")  # Claude-as-judge answer quality (1-5), where scored
     out["quality_local_overall"] = num(df, "quality_local_overall")  # local-SLM-as-judge (cheap first pass, separate judge)
     for dim in ("correctness", "completeness", "tone", "safety", "clarity"):
@@ -129,26 +133,26 @@ def load():
 def metrics(g):
     n = len(g)
     local = g["decision"].eq("LOCAL")
-    esc = g["decision"].eq("ESCALATE")
+    cache = g["decision"].eq("CACHE")
+    claude = g["decision"].eq("ESCALATE")        # Claude was actually called
+    esc = claude | cache                          # Tier 1 wasn't confident enough ("needed escalation")
     return {
         "rows": n,
         "local": int(local.sum()),
         "escalated": int(esc.sum()),
         "local_pct": 100.0 * local.sum() / n if n else None,
         "escalated_pct": 100.0 * esc.sum() / n if n else None,
-        # decision stays "ESCALATE" for a cache hit (Tier 1 still wasn't confident enough on
-        # its own) -- escalated_pct above is therefore "needed escalation", not "called
-        # Claude". These three split that correctly: claude_pct is the corrected real-call
-        # number, cache_pct is what the cache actually saved, and cache_hit_rate is specifically
-        # "of the queries that needed escalation, what fraction were served from cache" -- the
-        # number that answers "is the cache pulling its weight," independent of how the
-        # confidence threshold itself is performing.
-        "cache_hits": int((esc & g["cache_hit"]).sum()),
-        "claude_calls": int((esc & ~g["cache_hit"]).sum()),
-        "cache_pct": 100.0 * (esc & g["cache_hit"]).sum() / n if n else None,
-        "claude_pct": 100.0 * (esc & ~g["cache_hit"]).sum() / n if n else None,
-        "cache_hit_rate": 100.0 * (esc & g["cache_hit"]).sum() / esc.sum() if esc.sum() else None,
-        "avg_cache_similarity": g.loc[esc & g["cache_hit"], "cache_similarity"].mean() if (esc & g["cache_hit"]).any() else None,
+        # escalated / escalated_pct = "needed escalation" (Claude calls + cache hits), the
+        # denominator for how well the cache is doing. The three below split it into what
+        # actually happened: claude_pct is real Claude calls, cache_pct is what the cache saved,
+        # and cache_hit_rate is "of the queries that needed escalation, what fraction were
+        # served from cache" -- independent of how the confidence threshold itself is performing.
+        "cache_hits": int(cache.sum()),
+        "claude_calls": int(claude.sum()),
+        "cache_pct": 100.0 * cache.sum() / n if n else None,
+        "claude_pct": 100.0 * claude.sum() / n if n else None,
+        "cache_hit_rate": 100.0 * cache.sum() / esc.sum() if esc.sum() else None,
+        "avg_cache_similarity": g.loc[cache, "cache_similarity"].mean() if cache.any() else None,
         "avg_conf": g["conf"].mean(),
         "avg_conf_min": g["conf_min"].mean(),
         # Splitting average confidence by what happened to the query is more useful than one
@@ -187,7 +191,8 @@ def metrics(g):
         },
         "median_total_ms": g["total_ms"].median(),
         "median_local_ms": g.loc[local, "total_ms"].median(),
-        "median_escalated_ms": g.loc[esc, "total_ms"].median(),
+        "median_escalated_ms": g.loc[claude, "total_ms"].median(),   # queries that really called Claude
+        "median_cache_ms": g.loc[cache, "total_ms"].median() if cache.any() else None,
         "tier2_cost_usd": g["cost"].sum(),
         "cold_starts": int((g["load_ms"] > COLD_START_MS).sum()),
         "load_known": int(g["load_ms"].notna().sum()),      # rows that recorded a model-load time at all
@@ -234,13 +239,12 @@ def quality_three_way(g):
 
     payments_local = g[(g["unit"] == "payments") & (g["decision"] == "LOCAL")]
     retail_local = g[(g["unit"] == "retail_bank") & (g["decision"] == "LOCAL")]
-    # decision stays "ESCALATE" on a cache hit, so "escalated" alone would blend two different
-    # things: a fresh Tier 2 answer written for this query, and an old Tier 2 answer served again
-    # from the cache. They're separate buckets so "Claude quality" stays a clean measurement of
-    # Claude, and "cache" is a clean measurement of whether reused answers actually hold up --
-    # which is the real test of the cache (a cached answer judged against the NEW query).
-    claude = g[(g["decision"] == "ESCALATE") & ~g["cache_hit"]]
-    cache = g[(g["decision"] == "ESCALATE") & g["cache_hit"]]
+    # ESCALATE (a fresh Tier 2 answer written for this query) and CACHE (an old Tier 2 answer
+    # served again) are separate buckets so "Claude quality" stays a clean measurement of Claude,
+    # and "cache" is a clean measurement of whether reused answers actually hold up -- the real
+    # test of the cache (a cached answer judged against the NEW query).
+    claude = g[g["decision"] == "ESCALATE"]
+    cache = g[g["decision"] == "CACHE"]
     return {"payments_slm": q(payments_local), "retail_slm": q(retail_local), "claude": q(claude), "cache": q(cache)}
 
 
@@ -281,7 +285,8 @@ def run_detail(run_id: str = Query(...)):
         raise HTTPException(status_code=404, detail=f"No run called '{run_id}'")
     g = df[df["run_id"] == run_id]
     local = g["decision"].eq("LOCAL")
-    esc = g["decision"].eq("ESCALATE")
+    cache = g["decision"].eq("CACHE")
+    esc = g["decision"].eq("ESCALATE")           # rows that really called Claude
 
     # where each answer landed against the threshold
     pts = g.dropna(subset=["conf"])
@@ -313,6 +318,7 @@ def run_detail(run_id: str = Query(...)):
         "latency": {
             "local": {"tier1": g.loc[local, "t1_ms"].median(), "tier2": 0},
             "escalated": {"tier1": g.loc[esc, "t1_ms"].median(), "tier2": g.loc[esc, "t2_ms"].median()},
+            "cache": {"tier1": g.loc[cache, "total_ms"].median() if cache.any() else None, "tier2": 0},
         },
         "points": points,
         "recent": [{"start": r.start.isoformat() if pd.notna(r.start) else None, "unit": r.unit,
