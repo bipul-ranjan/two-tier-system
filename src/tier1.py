@@ -1,26 +1,34 @@
 """
-Tier 1: Local SLM generates a REAL answer (not just an intent label),
-with confidence computed from actual token log-probabilities returned
-by Ollama -- not a verbalized self-reported label.
+Tier 1: a small local model, served by Ollama, writes a real answer to the customer's question and reports
+how confident it was, using the probabilities of the words it actually produced.
 
-Two confidence methods are computed and returned side by side:
-- confidence_score_avg: geometric mean across all tokens (the Coco-paper
-  style method). Smooth, but diluted by common filler words ("I'm",
-  "sorry", "to", "hear") that the model is always confident about
-  regardless of whether it understood your actual question.
-- confidence_score_min: the single least-confident token in the whole
-  response. Sharper, more sensitive to one genuine moment of real
-  uncertainty, since it isn't averaged away by easy surrounding words.
+ask_tier1() returns, for one question: the answer text, two confidence figures (below), the business unit and
+assistant persona, the model's name, and Ollama's own timings (how long the model took to load, how many tokens
+it wrote).
 
-`confidence_score` (used by router.py for the actual routing decision)
-is currently set to the avg method, for consistency with what's been
-evaluated so far -- see scripts/compare_confidence_methods.py for how
-to test whether switching to min changes routing behaviour.
+Two confidence measures are computed from Ollama's token log-probabilities and returned side by side:
+- confidence_score_avg: the geometric mean of the probability of every token (the style used in the Coco paper).
+  Smooth, but diluted by filler words ("I'm", "sorry", "to") that the model is always sure of whether or not it
+  understood the question.
+- confidence_score_min: the probability of the single least-confident token. Sharper, but noisier.
+`confidence_score` is set equal to the average: it is what the older threshold router compares with a pass mark.
+The learned router takes the average as one of its four inputs and never compares it with a pass mark.
+Confidence measures how sure the model was of its own wording, not whether the answer is right. Against Claude's
+quality marks it is a weak signal (Spearman +0.33 in payments and +0.095 in retail bank, measured within each
+unit), which is why routing no longer rests on it alone.
 
-Requires Ollama v0.12.11 or newer (for logprobs support in /api/generate).
+Prompts. Each question is wrapped in PROMPT_TEMPLATE ("You are the <assistant name> for a retail bank ...")
+followed by any extra instructions for that business unit from prompts/business_unit_prompts.json, whose keys
+are business units and whose values look like {"additional_instructions": "..."}. A missing file or key adds nothing.
 
-Part of the src/ package -- run from the project root with:
-    python -m src.tier1
+Reliability. Each call times out after 120 seconds and is retried up to 3 times, 5 seconds apart, so one hung
+request cannot take down a long run. A call that still fails raises an error; the pipeline then skips that row,
+prints a warning, and carries on with the rest.
+
+Requirements: Ollama v0.12.11 or newer (it added log-probabilities to /api/generate), running, with every model
+named in config.py created or pulled.
+
+Quick test, one real Ollama call:    python -m src.tier1
 """
 import json
 import math
@@ -52,6 +60,9 @@ _PROMPTS_CACHE = None
 
 
 def load_business_unit_prompts() -> dict:
+    """The per-business-unit extra instructions from prompts/business_unit_prompts.json, read once and
+    cached. An empty dict if the file is missing.
+    """
     global _PROMPTS_CACHE
     if _PROMPTS_CACHE is not None:
         return _PROMPTS_CACHE
@@ -148,6 +159,9 @@ def compute_confidence_min(ollama_response: dict) -> float:
 
 
 def _extract_token_logprobs(ollama_response: dict):
+    """The list of token log-probabilities in an Ollama response, or None if Ollama returned none (an
+    Ollama older than v0.12.11).
+    """
     logprobs_data = ollama_response.get("logprobs")
     if not logprobs_data:
         return None
@@ -156,6 +170,9 @@ def _extract_token_logprobs(ollama_response: dict):
 
 
 def confidence_to_label(score: float) -> str:
+    """A word for a confidence score, for display only: very high (0.8 and up), high, medium, low, or
+    very low (below 0.2).
+    """
     if score >= 0.8:
         return "very high"
     elif score >= 0.6:

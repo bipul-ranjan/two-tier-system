@@ -41,9 +41,36 @@ cascade, and log every decision for later evaluation.
   what evaluate.py reads); every run is also appended to results/logs/results_history.csv,
   so runs -- e.g. before and after retraining -- can be compared.
 
-Run from the project root:
-    python -m src.pipeline          # default sample size
-    python -m src.pipeline 50       # 50 random rows
+Run from the project root, inside the venv, with Ollama running and ANTHROPIC_API_KEY set:
+
+    python -m src.pipeline                   # 100 random questions (N_SAMPLES), every default on
+    python -m src.pipeline 50                # 50 random questions
+
+Options, all optional and in any order after the number of questions:
+    --threshold-router         route with the older confidence pass marks (THRESHOLDS below) instead of the
+                               learned router. Use it to compare the two routers on the same questions
+    --nocache                  skip the semantic cache, so every escalation calls Claude
+    --noquality                skip the Claude quality marking after the run (quality columns stay blank;
+                               fill them later with scripts/backfill_quality_scores.py)
+    --score-quality-local M    also mark answers with the local Ollama model M, a cheap first pass written to
+                               separate quality_local_* columns (not the numbers to report)
+Unknown options are rejected with the list of valid ones. Defaults, with nothing after the number: learned router
+ON, semantic cache ON, Claude quality marking ON.
+
+What a run needs and does
+    Needs      Ollama running with the models named in src/config.py; ANTHROPIC_API_KEY for Claude (escalations
+               and quality marking); models/router/text_probe_router.joblib for the learned router (train it with
+               scripts/train_text_router.py); data/synthetic/synthetic_bitext_*.csv, the question pool.
+    Writes     results/logs/results_log_combined.csv (this run only), one results_log_<unit>.csv per business
+               unit, and results/logs/results_history.csv (every run, appended; locked for the whole run so nothing
+               else can open it). See results/logs/README.md for every column.
+    Prints     one block per question, then a summary of decisions, median latency and the router's escalation share.
+    Fails      before anything is loaded if the router model is missing or was trained under another scikit-learn
+               version, and the history file is locked from the moment the run starts. A row that fails is
+               skipped with a warning and every other row is still saved. Ctrl+C during quality marking still saves.
+
+Reproducible run: set SEED (below) to a number and the same questions are drawn every time. With SEED = None
+each run draws different ones, so two runs differ partly because their questions do.
 """
 import glob
 import os
@@ -91,6 +118,9 @@ DEFAULT_THRESHOLD = 0.7
 
 
 def get_threshold(business_unit: str, is_exception: bool) -> float:
+    """The confidence pass mark for a business unit and scenario (normal or exception), falling back to
+    DEFAULT_THRESHOLD for a unit that is not listed. Used by the older threshold router only.
+    """
     scenario = "exception" if is_exception else "normal"
     return THRESHOLDS.get(business_unit, {}).get(scenario, DEFAULT_THRESHOLD)
 
@@ -107,6 +137,9 @@ EXCEPTION_CATEGORIES = {"PAYMENT_EXCEPTION", "RETAIL_EXCEPTION"}
 
 
 def unit_for_category(category: str) -> str:
+    """Map a data category (CARD, ACCOUNT ...) to its business unit. An unknown category raises, so
+    nothing is silently routed to the wrong unit.
+    """
     if category in PAYMENTS_CATEGORIES:
         return "payments"
     if category in RETAIL_CATEGORIES:
@@ -142,6 +175,9 @@ def make_run_id(existing_ids=(), now=None) -> str:
 
 
 def existing_run_ids() -> set:
+    """The run ids already in results_history.csv, so that a new run id can never collide with an old
+    one.
+    """
     if not os.path.exists(HISTORY_PATH):
         return set()
     try:
@@ -227,6 +263,9 @@ class HistoryLock:
         return self
 
     def _lock(self) -> None:
+        """Take an exclusive lock on the open file (msvcrt on Windows, flock elsewhere). Fails at once
+        if another program holds it.
+        """
         self.file.seek(0)
         if sys.platform == "win32":
             msvcrt.locking(self.file.fileno(), msvcrt.LK_NBLCK, _WIN_LOCK_BYTES)
@@ -234,6 +273,7 @@ class HistoryLock:
             fcntl.flock(self.file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 
     def _unlock(self) -> None:
+        """Release the lock taken by _lock."""
         self.file.seek(0)
         if sys.platform == "win32":
             msvcrt.locking(self.file.fileno(), msvcrt.LK_UNLCK, _WIN_LOCK_BYTES)
@@ -309,6 +349,12 @@ def unload_models(models: list) -> None:
 
 def process_query(query: str, business_unit: str, category: str, intent: str, is_exception: bool, run_id: str,
                    cache_index: SemanticCacheIndex = None, router: TextProbeRouter = None) -> dict:
+    """Run one question through the whole cascade and return its log row. Tier 1 answers and reports
+    its confidence; the router (the learned router, or the threshold rule when router is None)
+    decides LOCAL or ESCALATE; an escalated question is looked up in the semantic cache (decision
+    CACHE on a hit) and otherwise sent to Claude (decision ESCALATE). Timings for every step are
+    recorded, and the row is printed as it is built.
+    """
     threshold = get_threshold(business_unit, is_exception)
 
     start_dt = datetime.now()
@@ -497,7 +543,8 @@ def score_quality_pass_local(rows: list, judge_model: str) -> None:
     Claude pass opt-in. Writes quality_local_<dimension> columns, kept separate from
     quality_<dimension> (the Claude-judged columns) so it's never mistaken for the numbers
     you'd actually report. Treat this as a triage signal, not a citable result on its own --
-    see scripts/compare_quality_judges.py to check how well it agrees with Claude before
+    run scripts/backfill_quality_scores.py with and without --judge-local and compare the two
+    sets of columns to check how well it agrees with Claude before
     leaning on it for anything beyond that.
     """
     print(f"\nScoring answer quality locally via {judge_model} for {len(rows)} rows (cheap first pass, not for reporting)...")
@@ -669,6 +716,9 @@ def parse_cli_args(args: list) -> tuple:
 
 
 def main(argv=None) -> None:
+    """Command-line entry point: parse the options, say which router, cache and quality scoring are on,
+    and run the pipeline on a random sample of the synthetic questions.
+    """
     n, score_quality, local_judge_model, use_semantic_cache, use_learned_router = parse_cli_args(sys.argv[1:] if argv is None else argv)
     if use_learned_router:
         print("Router: LEARNED (default). After Tier 1 answers, a trained model predicts how good the answer is and "
@@ -689,7 +739,7 @@ def main(argv=None) -> None:
         print("Quality evaluation: OFF (--noquality). Rows are saved with blank quality columns; "
               "run scripts/backfill_quality_scores.py to fill them in later.")
     if local_judge_model:
-        print(f"Local quality first-pass is ON via {local_judge_model}: cheap/free, but not the numbers to report -- see scripts/compare_quality_judges.py.")
+        print(f"Local quality first-pass is ON via {local_judge_model}: cheap/free, but not the numbers to report -- see section 13 of the user manual.")
     run_pipeline(load_random_sample(n), score_quality=score_quality, score_quality_local=local_judge_model,
                  use_semantic_cache=use_semantic_cache, use_learned_router=use_learned_router)
 

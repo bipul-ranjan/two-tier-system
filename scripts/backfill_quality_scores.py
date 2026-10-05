@@ -44,6 +44,9 @@ from src.tier2_escalate import client as anthropic_client
 
 
 def quality_cols(prefix: str) -> list:
+    """The column names a judge writes for a prefix: the five dimensions, the overall mark and the note
+    (prefixes: quality_, quality_draft_, quality_local_, quality_local_draft_).
+    """
     return [f"{prefix}{d}" for d in QUALITY_DIMS] + [f"{prefix}overall", f"{prefix}note"]
 
 
@@ -117,6 +120,11 @@ def score_missing(df: pd.DataFrame, prefix: str, judge_label: str, judge_one, li
 
 
 def main():
+    """Read the options, find the rows that are missing the chosen marks, judge them (with Claude, or
+    with a local model under --judge-local), copy local rows' final marks onto the draft columns for
+    free under --draft, and write the results back to the history and the latest-run logs. Safe to
+    re-run: marked rows are never judged again.
+    """
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--unit", default=None, help="only score this business_unit (default: all)")
     ap.add_argument("--run", default=None, help="only score this run_id (default: all runs in history)")

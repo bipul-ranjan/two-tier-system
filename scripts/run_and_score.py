@@ -23,6 +23,9 @@ import sys
 
 
 def run_step(cmd: list, label: str):
+    """Run one Python command under a banner, and stop the whole script if it fails, rather than
+    scoring on top of a run that did not finish.
+    """
     print(f"\n{'=' * 60}\n{label}\n{'=' * 60}")
     result = subprocess.run([sys.executable] + cmd)
     if result.returncode != 0:
@@ -33,6 +36,9 @@ def run_step(cmd: list, label: str):
 
 
 def main():
+    """Check that the first argument is a number of questions, then run the pipeline followed by the
+    two safety-net quality backfills.
+    """
     pipeline_args = sys.argv[1:]
     if not pipeline_args or not pipeline_args[0].lstrip("-").isdigit():
         print("Usage: python scripts/run_and_score.py <n> [--nocache] [--noquality] [other src.pipeline flags]")

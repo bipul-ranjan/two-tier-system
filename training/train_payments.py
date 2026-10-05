@@ -19,6 +19,17 @@ Mount Drive before running this script:
     drive.mount('/content/drive')
 
     python training/train_payments.py
+
+Settings for version 2 (shared with the retail script through train_config.py): LoRA rank 32 and alpha 32, 5 epochs,
+learning rate 1.5e-4, batches of 2 collected 4 times, 1,024-token examples, base model loaded in 4-bit. Training on
+10,902 examples took about 3 hours 44 minutes on a Colab L4 (6,815 steps; 1.54% of the parameters trained).
+
+Outputs, on Google Drive: payment_assistant.gguf (4-bit q4_k_m) in LJMU_Research/two-tier-system-models, and
+checkpoints every 250 steps in payments_checkpoints/. If the session drops, run the same command again: the script
+finds the latest checkpoint and resumes instead of starting over.
+
+Afterwards, in the folder that holds the .gguf (details in training/README.md):
+    ollama create payment-assistant-v2 -f Modelfile      # Modelfile contains: FROM ./payment_assistant.gguf
 """
 import os
 from unsloth import FastLanguageModel
@@ -44,6 +55,10 @@ CHECKPOINT_DIR = f"{MODEL_OUTPUT_DIR}/payments_checkpoints"
 
 
 def main():
+    """Check the data file exists, load the 4-bit Phi-3-mini with LoRA adapters, train with checkpoints
+    (resuming from one if it exists), and export the finished model as a GGUF file straight to
+    Google Drive.
+    """
     if not os.path.exists("/content/drive/MyDrive"):
         raise RuntimeError(
             "Google Drive is not mounted. Run this first, in its own cell:\n"

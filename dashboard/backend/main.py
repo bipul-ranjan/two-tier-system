@@ -1,19 +1,27 @@
 """
 Two-tier system dashboard - backend.
 
-Reads the pipeline's own logs from the project's results/logs folder and serves
-them as JSON, plus the prebuilt frontend:
+A small FastAPI app that reads the pipeline's own logs, serves them as JSON, and serves the prebuilt React frontend
+from dashboard/frontend/dist. There is nothing to configure and nothing to keep in sync.
 
-    results/logs/results_history.csv      every run (preferred)
-    results/logs/results_log_combined.csv latest run only (used if there is no history yet)
+Data, in results/logs/ (or the folder named by the TWO_TIER_LOGS_DIR environment variable):
+    results_history.csv        every run (preferred)
+    results_log_combined.csv   the latest run only (used if there is no history yet)
+The file is re-read only when it changes on disk, so the page can follow a run while it is in progress. Logs written
+by older versions of the pipeline still load: a missing column reads as blank, a missing router column means the
+confidence threshold decided, and an old cache hit (ESCALATE with cache_hit True) is shown as CACHE.
 
-Nothing else is needed - evaluate.py does not have to be run for the dashboard.
+Endpoints:
+    GET /api/health          status, which log is being read, and its number of rows and runs
+    GET /api/runs            every run in order, with headline metrics per run and per business unit
+    GET /api/run?run_id=...  one run in detail: KPIs, per-unit and per-scenario tables, latency, the dots for the
+                             "where each answer landed" chart (confidence against the threshold, or the predicted
+                             quality against the learned router's cut-point), and the latest queries
+    GET /                    the built frontend (or a short message if it has not been built)
 
-Run from the project root:
+Run from the project root (pip install -r dashboard/backend/requirements.txt once):
     python -m uvicorn dashboard.backend.main:app --port 8000
-then open http://localhost:8000
-
-Set TWO_TIER_LOGS_DIR to read logs from somewhere else.
+then open http://localhost:8000. Use --port 8010 if 8000 is taken. Node is only needed to change the page itself.
 """
 import math
 import os
@@ -63,6 +71,7 @@ def col(df, name):
 
 
 def num(df, name):
+    """A log column as numbers: missing or unparseable values become NaN."""
     return pd.to_numeric(col(df, name), errors="coerce")
 
 
@@ -136,6 +145,12 @@ def load():
 
 
 def metrics(g):
+    """Headline numbers for one group of rows (a whole run, one business unit in a run, or one scenario
+    type): counts and shares of LOCAL, CACHE and ESCALATE, average confidence (of local answers and
+    Claude's own), cache hit rate and similarity, median times per path, Claude spend, cold starts,
+    answer-quality averages, the threshold(s) and learned-router cut-point(s) in effect, and the
+    average predicted quality. Anything that was not logged comes back as None.
+    """
     n = len(g)
     local = g["decision"].eq("LOCAL")
     cache = g["decision"].eq("CACHE")
@@ -228,6 +243,9 @@ def router_of(g):
 
 
 def router_kind(name):
+    """"threshold" for the older confidence rule, "learned" for any saved version of the learned
+    router.
+    """
     return "threshold" if name == "threshold" else "learned"
 
 
@@ -253,6 +271,7 @@ def quality_three_way(g):
     (scripts/backfill_quality_scores.py --draft).
     """
     def q(sub):
+        """Average Claude-judged quality of a set of rows, with how many of them were scored."""
         vals = sub["quality_overall"].dropna()
         return {"avg": vals.mean() if len(vals) else None, "known": int(len(vals)), "rows": int(len(sub))}
 
@@ -270,6 +289,7 @@ def quality_three_way(g):
 # --------------------------------------------------------------------------- API
 @app.get("/api/health")
 def health():
+    """GET /api/health: which log is being read and how many rows and runs it holds."""
     df, source = load()
     return {"status": "ok", "logs_dir": str(LOGS_DIR), "source": source,
             "rows": 0 if df is None else len(df),
@@ -301,6 +321,8 @@ def runs():
 
 @app.get("/api/run")
 def run_detail(run_id: str = Query(...)):
+    """GET /api/run: everything the run page shows for one run_id (404 if the run is not in the log).
+    """
     df, source = load()
     if df is None or run_id not in set(df["run_id"]):
         raise HTTPException(status_code=404, detail=f"No run called '{run_id}'")
@@ -361,4 +383,5 @@ if DIST_DIR.exists():
 else:
     @app.get("/")
     def no_frontend():
+        """GET / when frontend/dist has not been built: say how to build it."""
         return {"message": "The frontend is not built. Build it with: cd dashboard/frontend && npm install && npm run build"}

@@ -28,6 +28,9 @@ OLD_VERSION = "v1-generic"
 
 
 def tag(history: pd.DataFrame) -> pd.DataFrame:
+    """Fill tier2_prompt_version for escalated rows that lack it: v1-generic for runs before
+    CUTOFF_RUN_ID, v2-persona from it onwards. Rows that are already tagged are left alone.
+    """
     if "tier2_prompt_version" not in history.columns:
         history["tier2_prompt_version"] = None
 
@@ -55,6 +58,7 @@ def tag(history: pd.DataFrame) -> pd.DataFrame:
 
 
 def main():
+    """Tag the history under its lock, and write it back only if something changed."""
     if not os.path.exists(HISTORY_PATH):
         raise FileNotFoundError(f"{HISTORY_PATH} not found -- nothing to backfill")
 

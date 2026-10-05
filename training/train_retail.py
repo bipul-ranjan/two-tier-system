@@ -26,6 +26,16 @@ Mount Drive before running this script:
     drive.mount('/content/drive')
 
     python training/train_retail.py
+
+Settings for version 2 are the same as for the payments script (train_config.py). Training on 18,843 examples (14,643
+real plus 4,200 synthetic exception examples) took about 5.5 hours on a Colab L4 (11,780 steps; 2.34% of the parameters
+trained), and was resumed from a checkpoint after the session disconnected once.
+
+Outputs, on Google Drive: retail_bank_assistant.gguf (4-bit q4_k_m) in LJMU_Research/two-tier-system-models, and
+checkpoints every 250 steps in retail_checkpoints/. If the session drops, run the same command again and it resumes.
+
+Afterwards, in the folder that holds the .gguf (details in training/README.md):
+    ollama create retail-bank-assistant-v2 -f Modelfile  # Modelfile contains: FROM ./retail_bank_assistant.gguf
 """
 import os
 from unsloth import FastLanguageModel
@@ -48,6 +58,10 @@ CHECKPOINT_DIR = f"{MODEL_OUTPUT_DIR}/retail_checkpoints"
 
 
 def main():
+    """Check both data files exist (real Bitext and synthetic exception examples), load the 4-bit
+    Qwen2.5-1.5B with LoRA adapters, train with checkpoints (resuming from one if it exists), and
+    export the finished model as a GGUF file straight to Google Drive.
+    """
     if not os.path.exists("/content/drive/MyDrive"):
         raise RuntimeError(
             "Google Drive is not mounted. Run this first, in its own cell:\n"

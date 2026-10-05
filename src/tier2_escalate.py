@@ -1,7 +1,28 @@
 """
-Tier 2: escalate a query to a shared Claude model (the "single escalation
-LLM" in the architecture). Requires ANTHROPIC_API_KEY to be set as an
-environment variable. Install with: pip install anthropic
+Tier 2: Claude answers the questions Tier 1 could not be trusted with.
+
+An escalated question is sent to Claude Haiku 4.5 (MODEL below) with a system prompt that gives Claude the same
+first-person, bank-employee framing the Tier 1 models were trained on (_system_prompt). PROMPT_VERSION records
+which wording of that prompt is in force, so a change to it shows up on the dashboard's trend charts by itself.
+Claude is also asked to finish with a line "CONFIDENCE: 0.xx"; _split_confidence() removes it from the answer and
+it is logged as tier2_confidence. That figure is Claude's own estimate, not a measured probability, so it is not
+comparable with Tier 1's confidence.
+
+ask_tier2() returns the answer, the self-reported confidence, the input and output token counts and the prompt
+version. estimate_cost() turns token counts into US dollars with PRICE_PER_1K_INPUT and PRICE_PER_1K_OUTPUT (Haiku 4.5
+list prices when this was written: $0.001 per 1,000 tokens read and $0.005 per 1,000 written; check
+docs.claude.com/en/docs/about-claude/pricing before quoting cost figures). In the project's own logs an escalated
+answer averaged about $0.0014.
+
+Setup: the anthropic package (in requirements.txt) and your key in the ANTHROPIC_API_KEY environment variable. The key
+is read once, when this module is imported, so set it BEFORE starting Python (on Windows: setx, then open a NEW
+PowerShell window). Never write the key into a file in the project.
+
+Where it sits: the semantic cache (semantic_cache.py) is consulted first, so a near-exact repeat of an earlier
+question is answered from a past Claude answer and never reaches this module. The same key also pays for the
+examiner in quality.py, which uses a different, more careful model.
+
+Quick test, one real Claude call that costs a fraction of a cent:    python -m src.tier2_escalate
 """
 import os
 import re

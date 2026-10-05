@@ -1,16 +1,16 @@
 """
-Converts the FinQA JSON files (train.json, dev.json, test.json) into flat
-CSV files, one row per question, suitable for feeding into the Tier 2
-escalation-testing pipeline.
+Converts the FinQA JSON files (train.json, dev.json, test.json) into flat CSV files with one row per question.
 
-Run once, after scripts/fetch_data.py has cloned FinQA:
+FinQA's raw files are deeply nested (pre_text, post_text, table, and a qa sub-object). This flattens each record
+into one row so it can be loaded and filtered like every other file in data/raw/: finqa_train.csv, finqa_dev.csv
+and finqa_test.csv. The table and gold_inds columns keep their structure as JSON strings, so json.loads() restores
+them. Like fetch_data.py, this is only needed to repeat the project's earliest experiments, not to run the system.
+
+Run once, after scripts/fetch_data.py has cloned FinQA, from the project root:
     python scripts/convert_finqa_to_csv.py
 
-Note: no "-m" needed here, same reasoning as fetch_data.py -- this
-script only imports the standard library (json, os, csv via pandas),
-never a sibling file, so it runs directly.
-
-Safe to re-run -- skips any CSV that already exists.
+No "-m" is needed: the script imports only the standard library and pandas, never a sibling file. Safe to re-run:
+a CSV that already exists is skipped.
 """
 import os
 import json
@@ -27,6 +27,9 @@ SPLITS = {
 
 
 def convert_split(split_name: str, filename: str):
+    """Flatten one FinQA JSON split into data/raw/finqa_<split>.csv. Skips it if the CSV exists, and
+    says so if the JSON has not been downloaded yet.
+    """
     out_path = f"{OUT_DIR}/finqa_{split_name}.csv"
 
     if os.path.exists(out_path):

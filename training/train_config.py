@@ -68,6 +68,9 @@ def load_and_format_dataset(jsonl_path, assistant_name: str):
     dataset = load_dataset("json", data_files=jsonl_path, split="train")
 
     def formatting_func(example):
+        """Turn one training example into the text the model learns from: the assistant persona line,
+        the customer query, then the response.
+        """
         text = (
             f"### Instruction:\nYou are the {assistant_name} for a retail bank.\n\n"
             f"### Query:\n{example['instruction']}\n\n"

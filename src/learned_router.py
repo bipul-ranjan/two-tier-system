@@ -40,6 +40,9 @@ class RouterNotTrainedError(RuntimeError):
 
 
 def _vectorizer():
+    """A TF-IDF vectoriser over single words and two-word phrases: ignores those seen in fewer than
+    MIN_DF rows, keeps the top MAX_FEATURES, and uses sub-linear counts.
+    """
     from sklearn.feature_extraction.text import TfidfVectorizer
     return TfidfVectorizer(ngram_range=(1, 2), min_df=MIN_DF, max_features=MAX_FEATURES, sublinear_tf=True)
 
@@ -65,6 +68,9 @@ class TextProbeRouter:
 
     # ----------------------------------------------------------------- features
     def _matrix(self, queries, answers, confidences, units):
+        """The model's input for a batch: the question's TF-IDF, the answer's TF-IDF and the
+        standardised numeric features, side by side.
+        """
         import scipy.sparse as sp
         num = _numeric(answers, queries, confidences, units, self.units)
         num = (num - self.mean) / self.std
@@ -94,6 +100,7 @@ class TextProbeRouter:
         return self.ridge.predict(self._matrix(list(queries), list(answers), confidences, list(units)))
 
     def predict_one(self, query, answer, confidence, unit) -> float:
+        """Predicted quality for a single question and answer."""
         return float(self.predict([query], [answer], [confidence], [unit])[0])
 
     def decide(self, predicted_quality: float) -> str:
@@ -102,6 +109,9 @@ class TextProbeRouter:
 
     @property
     def version(self) -> str:
+        """The saved version label. It changes whenever the router is retrained, and the dashboard
+        shows it.
+        """
         return self.meta.get("version", ROUTER_KIND)
 
     # ----------------------------------------------------------------- explain
@@ -119,6 +129,9 @@ class TextProbeRouter:
 
     # ----------------------------------------------------------------- save / load
     def save(self, path: str = MODEL_PATH) -> None:
+        """Write the model to path with joblib, and a readable _info.json beside it that records the
+        scikit-learn version it was trained under.
+        """
         import sklearn
         self.meta["sklearn_version"] = sklearn.__version__
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -128,6 +141,9 @@ class TextProbeRouter:
 
     @classmethod
     def load(cls, path: str = MODEL_PATH) -> "TextProbeRouter":
+        """Load a saved router. Refuses, with a message that says how to retrain, if the file is
+        missing, unreadable, from another scikit-learn version, or has no cut-point.
+        """
         import sklearn
         if not os.path.exists(path):
             raise RouterNotTrainedError(

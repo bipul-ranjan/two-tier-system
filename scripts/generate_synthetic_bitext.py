@@ -18,6 +18,15 @@ and generic -- they are not the policies of any real bank.
 
 Reproducible: same SEED -> same files. Run from the project root:
     python scripts/generate_synthetic_bitext.py
+
+Settings (constants near the top of the file): SEED = 20260928, N_FILES = 10, ROWS_PER_FILE = 1600, OUT_DIR =
+data/synthetic. Each file gets its own random mix of the four scenario groups (normal groups roughly 28-42% each,
+exception groups roughly 8-22% each), and no instruction is repeated across the files. Outputs:
+    data/synthetic/synthetic_bitext_01.csv ... synthetic_bitext_10.csv   the questions the pipeline samples from
+    data/synthetic/synthetic_manifest.csv                                 each file's row count and group counts
+The ten files are committed to the repository, so you only need to run this to regenerate them. Changing SEED makes a
+different set of questions. The exception training data (generate_exception_training_data.py) is checked against these
+files so the models never train on a question the pipeline later tests them with.
 """
 import csv
 import os
@@ -49,6 +58,7 @@ WHEN = ["yesterday", "this morning", "last Friday", "two days ago", "last week",
 
 
 def fmt_amount(rng, low, high):
+    """A random money amount written in one of several styles ($1,200, 1,200 USD, INR 1,200 ...)."""
     n = rng.randint(low, high)
     if n >= 1000:
         n = round(n, -1)
@@ -68,6 +78,9 @@ def fmt_amount(rng, low, high):
 
 
 def make_slots(rng):
+    """Random values for every {placeholder} the question and answer templates can contain (merchant,
+    amounts, card type, last four digits, time words ...).
+    """
     return {
         "merchant": rng.choice(MERCHANTS),
         "amount": fmt_amount(rng, 15, 3000),
@@ -109,12 +122,16 @@ CLOSE_ESC = ["If you would like, I can connect you with a human agent right now.
 
 
 def lower_first(text):
+    """Lower-case the first letter of a sentence, except where it starts "I" or an acronym."""
     if len(text) > 1 and (text[1].isupper() or text[:2] in ("I ", "I'")):
         return text
     return text[0].lower() + text[1:]
 
 
 def style(rng, text):
+    """Dress a plain question in a random greeting and closing, and sometimes rough up its wording, so
+    the questions are not all phrased the same way.
+    """
     prefix = rng.choice(PREFIXES)
     suffix = rng.choice(SUFFIXES)
     if prefix and (prefix.endswith(", ") or prefix.endswith(": ")):
@@ -135,6 +152,9 @@ def style(rng, text):
 
 
 def build_response(rng, tone, body):
+    """Assemble an answer from an optional opening line (chosen by tone), the body, and an optional
+    closing line.
+    """
     parts = []
     if tone == "help" and rng.random() < 0.5:
         parts.append(rng.choice(OPEN_HELP))
@@ -151,6 +171,7 @@ def build_response(rng, tone, body):
 
 
 def fields(template):
+    """The set of {placeholder} names a template string uses."""
     return {f for _, f, _, _ in Formatter().parse(template) if f}
 
 
@@ -569,6 +590,9 @@ for _group, _items in INTENTS.items():
 
 
 def build_row(rng, group):
+    """One (instruction, category, intent, response) row for a scenario group: pick an intent, fill its
+    templates with random values, and style the question.
+    """
     category, intent, tone, instrs, resps = rng.choice(INTENTS[group])
     slots = make_slots(rng)
     template = rng.choice(instrs)
@@ -580,12 +604,16 @@ def build_row(rng, group):
 
 
 def random_mix(rng):
+    """Random proportions for the four scenario groups, normalised to add up to 1."""
     w = [rng.uniform(0.28, 0.42), rng.uniform(0.28, 0.42), rng.uniform(0.08, 0.22), rng.uniform(0.08, 0.22)]
     total = sum(w)
     return [x / total for x in w]
 
 
 def main():
+    """Write N_FILES CSV files of ROWS_PER_FILE rows each, with a different random mix per file and no
+    instruction repeated across files, plus synthetic_manifest.csv.
+    """
     rng = random.Random(SEED)
     seen = set()
     os.makedirs(OUT_DIR, exist_ok=True)

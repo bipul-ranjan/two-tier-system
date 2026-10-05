@@ -40,6 +40,7 @@ FALLBACK_CLAUDE_QUALITY = 4.38
 
 
 def row_key(query: str, answer: str) -> str:
+    """A stable id for a (question, answer) pair, used to cache its score."""
     return hashlib.md5(f"{query}\x1f{answer}".encode("utf-8")).hexdigest()
 
 
@@ -65,6 +66,7 @@ def load_scorer(model_name: str, bf16: bool = False):
     model.to(device).eval()
 
     def score(prompt: str, response: str) -> float:
+        """One reward score for a (question, answer) pair. Higher means a better answer."""
         conv = [{"role": "user", "content": prompt}, {"role": "assistant", "content": response[:MAX_ANSWER_CHARS]}]
         text = tokenizer.apply_chat_template(conv, tokenize=False)
         if tokenizer.bos_token is not None and text.startswith(tokenizer.bos_token):
@@ -77,6 +79,7 @@ def load_scorer(model_name: str, bf16: bool = False):
 
 
 def load_history(path: str) -> pd.DataFrame:
+    """Load the history with the columns the probe needs, dropping rows that lack any of them."""
     if not os.path.exists(path):
         raise SystemExit(f"{path} not found -- run this from the project root, or pass --history")
     df = pd.read_csv(path)
@@ -114,6 +117,7 @@ def pick_rows(df: pd.DataFrame, n_total: int) -> pd.DataFrame:
 
 
 def read_cache(path: str) -> pd.DataFrame:
+    """The reward-model scores saved by earlier runs, or an empty table."""
     if os.path.exists(path) and os.path.getsize(path) > 0:
         return pd.read_csv(path)
     return pd.DataFrame(columns=["key", "rm_score"])
@@ -130,6 +134,7 @@ def score_missing(sample: pd.DataFrame, scorer, cache_path: str) -> bool:
     pending, t0 = [], time.time()
 
     def flush():
+        """Append the scores held in memory to the cache file and clear them."""
         if pending:
             pd.DataFrame(pending).to_csv(cache_path, mode="a", header=not (os.path.exists(cache_path) and os.path.getsize(cache_path) > 0), index=False)
             pending.clear()
@@ -172,6 +177,9 @@ def text_probe_oof(df: pd.DataFrame) -> np.ndarray:
 
 
 def spearman(a, b):
+    """Spearman correlation with a 95% confidence interval from Fisher's z transform. Returns (r, low,
+    high).
+    """
     from scipy.stats import spearmanr
     a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)   # never trust the input type: object arrays break numpy on some versions
     r = spearmanr(a, b)[0]
@@ -195,6 +203,10 @@ def delivered_quality(scored: pd.DataFrame, score_col: str, frac: float, claude_
 
 
 def report(scored: pd.DataFrame, claude_q: float):
+    """Print the comparison of Tier 1 confidence, the reward model and the text probe: correlations per
+    unit with intervals, AUC, each quality dimension, and the quality delivered at fixed escalation
+    rates.
+    """
     from sklearn.metrics import roc_auc_score
     methods = [("confidence", "tier1_confidence_avg"), ("reward model", "rm_score"), ("text probe", "text_probe")]
     units = sorted(scored["business_unit"].unique())
@@ -244,6 +256,9 @@ def report(scored: pd.DataFrame, claude_q: float):
 
 
 def main(argv=None, scorer_factory=load_scorer) -> int:
+    """Read the options, pick the rows, score the ones not already cached (saving as it goes, so Ctrl+C
+    is safe), then print the report.
+    """
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", default=DEFAULT_MODEL, help=f"Hugging Face model id (default {DEFAULT_MODEL})")
     ap.add_argument("--n", type=int, default=500, help="total rows to score, split evenly across business units (default 500)")

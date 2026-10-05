@@ -1,9 +1,23 @@
-datasets
-requests
-pandas
-scikit-learn
+# Packages for RUNNING the system. Install inside the project's virtual environment:
+#     pip install -r requirements.txt
+# Also needed for the dashboard:  pip install -r dashboard/backend/requirements.txt
+# Training the models on Google Colab uses a separate list: training/requirements.txt
+
+# --- the pipeline ---
+requests                 # talks to Ollama (the local models)
+anthropic                # talks to Claude: escalated answers and the quality marking
+pandas                   # the logs
+numpy
+scipy
+scikit-learn             # the learned router. A saved router only loads under the version that trained it (see models/README.md)
+joblib                   # saves and loads the router (installed with scikit-learn; listed because the code imports it directly)
+sentence-transformers    # the semantic cache's embedding model. Also installs PyTorch and transformers (several GB)
+
+# --- summary charts (src/evaluate.py) ---
 matplotlib
-openai
+
+# --- downloading datasets (scripts/fetch_data.py, scripts/fetch_bitext_banking.py) ---
+datasets
+
+# --- tests ---
 pytest
-anthropic
-sentence-transformers

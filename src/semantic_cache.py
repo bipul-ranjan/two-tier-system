@@ -15,6 +15,17 @@ without needing a model call to do it.)
 Cache entries are seeded from Tier 2 (Claude) answers only -- the highest-quality source
 already in results_history.csv -- not from Tier 1's own (lower, and per Finding #2, not
 quality-equivalent) answers.
+
+In the pipeline. SemanticCacheIndex is built once at the start of a run from every fresh Claude answer already in
+results_history.csv (rows whose decision is ESCALATE and that were not themselves cache hits, so a cached answer is
+never cached again and match chains cannot form). try_semantic_cache(index, query, category, intent) is called only for
+questions the router sent up. A hit is logged with decision CACHE, its similarity, the question it matched and
+cache_path "direct". The two free checks are negation_consistent() (one question negated and the other not is
+rejected) and entity_consistent() (the category and intent labels must match). Turn the cache off with --nocache.
+
+First use downloads the 22-million-parameter all-MiniLM-L6-v2 embedding model (about 90 MB, once). If
+sentence-transformers is missing or the download fails, the run continues without the cache and says so, so a 0% hit
+rate is never silent.
 """
 import re
 
@@ -45,6 +56,8 @@ _NEGATION_WORDS = {
 
 
 def _tokenize(text: str) -> set:
+    """The set of lower-case words (letters and apostrophes) in a text, used by the negation check.
+    """
     return set(re.findall(r"[a-z']+", text.lower()))
 
 
@@ -85,6 +98,9 @@ class SemanticCacheIndex:
 
     @staticmethod
     def _default_embed_fn():
+        """Load the sentence-transformers model once and return a function that embeds a list of texts
+        as unit-length vectors.
+        """
         from sentence_transformers import SentenceTransformer
         model = SentenceTransformer(EMBED_MODEL_NAME)
         return lambda texts: model.encode(texts, normalize_embeddings=True)

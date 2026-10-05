@@ -1,9 +1,20 @@
 """
-One-time data acquisition script: downloads Banking77 (via Hugging Face
-datasets) and clones FinQA (via git), saving everything into data/raw/.
+One-time download of the two public datasets behind the project's first design.
 
-Run once, from the project root:
+    Banking77   about 13,000 real customer-service questions with 77 intent labels, saved as
+                data/raw/banking77_train.csv and data/raw/banking77_test.csv
+                (fetched from the mteb/banking77 mirror on Hugging Face: the original PolyAI/banking77 repository
+                uses a legacy loading script that current versions of the datasets library refuse to run)
+    FinQA       financial questions with tables and numeric answers, git-cloned into ./FinQA
+                (turn it into CSV files with scripts/convert_finqa_to_csv.py)
+
+You do NOT need either dataset to run the pipeline, train the models or use the dashboard: the live system is tested
+on the synthetic Bitext-style questions in data/synthetic/. They are only used by the ground-truth helpers in
+src/quality.py. Fetch them if you want to repeat the project's earliest experiments.
+
+Run once, from the project root, inside the venv (needs the datasets package, and Git for FinQA):
     python scripts/fetch_data.py
+Safe to re-run: anything already downloaded is skipped, and the script says so.
 """
 import os
 import subprocess
@@ -13,6 +24,9 @@ DATA_DIR = "data/raw"
 
 
 def fetch_banking77():
+    """Download Banking77 (train and test) to data/raw as CSV from the mteb mirror, skipping it if both
+    files exist.
+    """
     train_path = f"{DATA_DIR}/banking77_train.csv"
     test_path = f"{DATA_DIR}/banking77_test.csv"
 
@@ -42,6 +56,9 @@ def fetch_banking77():
 
 
 def fetch_finqa():
+    """git clone FinQA into ./FinQA, skipping it if the folder exists and saying so if Git is not
+    installed.
+    """
     finqa_dir = "FinQA"
 
     if os.path.exists(finqa_dir):

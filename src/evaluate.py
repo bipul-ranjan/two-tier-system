@@ -1,10 +1,25 @@
 """
-Compute the headline metrics from a results log: resolution rate, latency
-comparison, cost vs. an all-LLM baseline, and a cost-accuracy trade-off
-curve across multiple thresholds.
+Headline numbers from a results log: how many questions Tier 1 resolved, how long each path took, what Claude
+cost, and what sending everything to Claude would have cost.
 
-Part of the src/ package — run from the project root with:
-    python -m src.evaluate
+Reads results/logs/results_log_combined.csv, which holds the LATEST run only (results_history.csv holds every run
+and is what the dashboard reads), and writes two small tables to results/tables/:
+    summary_metrics.csv         resolution rate, average local and escalated latency, total cost, the estimated
+                                all-Claude cost, and the cost reduction between the two
+    business_unit_metrics.csv   the same figures per business unit and Tier 1 model
+
+Definitions, so the numbers can be checked against the log:
+    resolution rate        the share of rows whose decision is LOCAL
+    escalated latency      tier1_latency_ms + tier2_latency_ms, for rows whose decision is ESCALATE
+    all-Claude baseline    the number of rows x the average cost of a row that really called Claude
+Rows served from the semantic cache (decision CACHE) cost nothing and are not counted as escalated here, so they
+lower the total cost without appearing in the escalated latency. The dashboard shows the three-way split
+LOCAL / CACHE / ESCALATE directly and is the better place to read cache effects.
+
+plot_tradeoff() draws a cost-against-accuracy curve from a dictionary you build by hand. Nothing calls it
+automatically.
+
+Run from the project root, after a pipeline run:    python -m src.evaluate
 """
 import os
 import pandas as pd
@@ -12,6 +27,9 @@ import matplotlib.pyplot as plt
 
 
 def summarize(log_path: str = "results/logs/results_log_combined.csv", out_dir: str = "results/tables") -> dict:
+    """Compute the headline metrics for a log, save them as summary_metrics.csv in out_dir, print them,
+    and return them as a dict.
+    """
     os.makedirs(out_dir, exist_ok=True)
     df = pd.read_csv(log_path)
 

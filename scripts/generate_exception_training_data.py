@@ -60,6 +60,10 @@ def existing_synthetic_instructions() -> set:
 
 
 def main():
+    """For each exception group, build ROWS_PER_INTENT training rows per intent from the shared
+    templates, skipping any instruction already used in data/synthetic (the train/test leak check),
+    and write one JSONL file per business unit.
+    """
     rng = gen.random.Random(SEED)
     blocked = existing_synthetic_instructions()
     print(f"Loaded {len(blocked)} existing pipeline-test instructions to avoid duplicating.\n")

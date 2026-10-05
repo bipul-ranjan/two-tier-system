@@ -47,6 +47,9 @@ LABELS = [f"quality_draft_{d}" for d in DIMS]
 # ----------------------------------------------------------------------------- data
 
 def load_data(path: str, n: int = None, seed: int = 0) -> pd.DataFrame:
+    """Load the history rows that have everything the router needs, optionally a random sample of n
+    rows for a quick test.
+    """
     df = load_history(path)
     missing = [c for c in LABELS if c not in df.columns]
     if missing:
@@ -66,6 +69,7 @@ def numeric_features(df: pd.DataFrame, units: list) -> np.ndarray:
 
 
 def make_folds(df: pd.DataFrame, k: int):
+    """Split the rows into k folds that each hold out whole intents."""
     from sklearn.model_selection import GroupKFold
     return list(GroupKFold(n_splits=k).split(df, groups=df["intent"].fillna("none")))
 
@@ -73,6 +77,7 @@ def make_folds(df: pd.DataFrame, k: int):
 # ----------------------------------------------------------------------------- encoder
 
 def load_encoder(base_model: str, device: str):
+    """Load the MiniLM tokenizer and model onto the chosen device."""
     from transformers import AutoModel, AutoTokenizer
     try:
         return AutoTokenizer.from_pretrained(base_model), AutoModel.from_pretrained(base_model).to(device)
@@ -82,6 +87,7 @@ def load_encoder(base_model: str, device: str):
 
 
 def mean_pool(hidden, mask):
+    """Average the encoder's token vectors, ignoring padding."""
     m = mask.unsqueeze(-1).to(hidden.dtype)
     return (hidden * m).sum(1) / m.sum(1).clamp(min=1e-9)
 
@@ -128,6 +134,9 @@ def get_embeddings(df, base_model, max_length, device, out_dir):
 # ----------------------------------------------------------------------------- mode 1: frozen encoder + ridge
 
 def frozen_oof(df, folds, base_model, max_length, device, out_dir):
+    """Frozen mode: embed every row once, fit a ridge model on top for each fold, and return held-out
+    predictions for every row.
+    """
     from sklearn.linear_model import Ridge
     from sklearn.model_selection import GroupKFold
     from sklearn.preprocessing import StandardScaler
@@ -156,9 +165,15 @@ def frozen_oof(df, folds, base_model, max_length, device, out_dir):
 # ----------------------------------------------------------------------------- mode 2: fine-tuned encoder
 
 def build_net(encoder, n_numeric):
+    """The fine-tuning network: the MiniLM encoder plus a small head that also takes the numeric
+    features.
+    """
     import torch
 
     class RouterNet(torch.nn.Module):
+        """MiniLM encoder with a small head that predicts the five quality marks from the encoded
+        question and answer plus the numeric features.
+        """
         def __init__(self):
             super().__init__()
             self.encoder = encoder
@@ -166,6 +181,7 @@ def build_net(encoder, n_numeric):
                                             torch.nn.Dropout(0.1), torch.nn.Linear(256, len(DIMS)))
 
         def forward(self, enc, numeric):
+            """Predict the five quality marks for a batch."""
             pooled = mean_pool(self.encoder(**enc).last_hidden_state, enc["attention_mask"])
             return self.head(torch.cat([pooled, numeric], dim=1))
 
@@ -173,6 +189,7 @@ def build_net(encoder, n_numeric):
 
 
 def finetune_fold(df, tr, te, units, args, device, fold):
+    """Train on one fold's training rows and predict its held-out rows."""
     import torch
     from transformers import get_linear_schedule_with_warmup
     torch.manual_seed(args.seed + fold)
@@ -188,6 +205,7 @@ def finetune_fold(df, tr, te, units, args, device, fold):
     queries, answers = df["query"].tolist(), df["tier1_answer"].tolist()
 
     def encode(idx):
+        """Tokenise and encode a batch of rows."""
         return tokenizer([queries[i] for i in idx], [answers[i] for i in idx], padding=True, truncation="only_second",
                          max_length=args.max_length, return_tensors="pt").to(device)
 
@@ -215,6 +233,9 @@ def finetune_fold(df, tr, te, units, args, device, fold):
 
 
 def finetune_oof(df, folds, args, device, out_dir):
+    """Fine-tune fold by fold, saving each fold's predictions as it finishes, so Ctrl+C is safe and a
+    re-run continues where it stopped.
+    """
     units = sorted(df["business_unit"].unique())
     tag = f"finetune_{os.path.basename(args.base_model.rstrip('/'))}_L{args.max_length}_E{args.epochs}_F{len(folds)}_S{args.seed}_N{len(df)}"
     path = os.path.join(out_dir, f"router_oof_{tag}.csv")
@@ -262,6 +283,10 @@ def boot_diff(S, a, b, frac, claude_q, B=1000, seed=0):
 
 
 def report(S, claude_q, rm_rows=None):
+    """Print the comparison of confidence, the text probe and the router (plus the reward model where
+    it has scores): correlations with intervals, AUC, quality dimensions, delivered quality, and a
+    test of whether each difference is beyond luck.
+    """
     from sklearn.metrics import roc_auc_score
     S = S.copy()
     units = sorted(S["business_unit"].unique())
@@ -273,6 +298,9 @@ def report(S, claude_q, rm_rows=None):
           f"every one scored by a model that never saw its intent.")
 
     def table(frame, sigs, title):
+        """Print one comparison table: a row per signal, a column per business unit, and the mean of
+        the units.
+        """
         print(f"\n{title}")
         print(f"  {'':14s}" + "".join(f"{u:>26s}" for u in units) + f"{'mean of units':>16s}")
         res = {}
@@ -331,6 +359,8 @@ def report(S, claude_q, rm_rows=None):
 
 
 def main(argv=None) -> int:
+    """Read the options, run the chosen mode (or only report on saved folds), and print the report.
+    """
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--mode", choices=["frozen", "finetune"], default="frozen")
     ap.add_argument("--base-model", default=DEFAULT_BASE, help=f"encoder (default {DEFAULT_BASE})")

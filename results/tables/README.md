@@ -1,32 +1,12 @@
 # results/tables/
 
-Aggregated metrics, produced by `python -m src.evaluate` from the raw
-logs in `results/logs/`. These are the numbers that actually go into
-your dissertation write-up and the live dashboard — the logs are
-evidence, these tables are the findings.
+Summary tables for the **latest run**, written by `python -m src.evaluate` from `results/logs/results_log_combined.csv`. Not tracked by Git.
 
-## Files
+| File | Contains |
+|---|---|
+| `summary_metrics.csv` | One row: `resolution_rate_tier1` (the share decided `LOCAL`), `avg_latency_local_ms`, `avg_latency_escalated_ms` (Tier 1 plus Claude time, for `ESCALATE` rows), `total_cost_usd`, `estimated_all_llm_cost_usd`, `cost_reduction_pct` |
+| `business_unit_metrics.csv` | One row per business unit: `tier1_model`, `query_count`, `resolution_rate_tier1`, the two latencies, `total_cost_usd` |
 
-| File | Produced by | Contents |
-|---|---|---|
-| `summary_metrics.csv` | `evaluate.summarize()` | One row: overall resolution rate, average latency (local vs. escalated), total cost, cost reduction vs. an all-LLM baseline |
-| `business_unit_metrics.csv` | `evaluate.summarize_by_business_unit()` | One row per business unit: same metrics, broken out so you can compare `payments` (phi3:mini) against `retail_bank` (qwen2.5:1.5b) directly |
-
-## This is what the live dashboard reads
-
-If you're running the separate `live-dashboard` project alongside this
-one, point its backend at this exact folder:
-
-```
-export TOPIC1_RESULTS_DIR=/path/to/two-tier-system/results/tables
-```
-
-The dashboard shows a green "LIVE DATA" badge once it finds real files
-here, and orange "PLACEHOLDER" data until then — so an empty version of
-this folder isn't an error, it's just what things look like before
-you've run `evaluate.py` for the first time.
-
-## Not tracked by Git
-
-Same reasoning as `results/logs/` — regenerated on every run, so
-there's nothing worth version-controlling here directly.
+How to read them: the all-Claude baseline is the number of rows times the average cost of a row that really called Claude. Rows served
+from the cache (`CACHE`) cost nothing and are not counted as escalated here, so they lower the cost without appearing in the escalated
+latency. The dashboard shows the three-way split directly and covers every run, not just the latest.

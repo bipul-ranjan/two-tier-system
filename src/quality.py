@@ -1,28 +1,27 @@
 """
-Quality estimation: computes REAL accuracy against ground truth (not the
-confidence proxy router.py uses at decision time), and combines it with
-cost into the Q(x) - lambda*cost score used to evaluate/tune the cascade.
+Answer-quality scoring. This module holds two different things that are used at different times.
 
-Important distinction, worth keeping straight:
-- router.py's confidence score is used AT INFERENCE TIME, before the true
-  answer is known -- it's a proxy for quality, necessarily imperfect.
-- This module is used OFFLINE, during evaluation, where ground truth
-  answers ARE available (from Banking77's label_text, FinQA's exe_ans).
-  This is where Q(x) - lambda*cost actually becomes computable and
-  meaningful -- as a way to score and compare cascade configurations
-  after the fact, not as a live routing rule.
+1. Claude as examiner (the scoring the project reports). judge_answer_quality() sends a question and an answer to
+   QUALITY_JUDGE_MODEL (claude-sonnet-5, deliberately a more careful model than the Haiku that writes escalated
+   answers) together with a rubric, and gets back five marks from 1 to 5: correctness, completeness, tone, safety
+   and clarity, plus a one-sentence note. quality_overall is the average of the five. After a run finishes, the
+   pipeline calls it once for every row's final answer and once for every escalated row's discarded Tier 1 draft
+   (scripts/backfill_quality_scores.py fills in older rows). Calls use max_tokens=300 with extended thinking
+   switched off, and are retried a few times before a row is given up as unscored.
+   judge_answer_quality_local() applies the same rubric with a local Ollama model: a cheap first pass whose marks
+   go into separate quality_local_* columns and are not the numbers to report.
+   Limit to keep in mind: Claude's marks have not been checked against human markers, and every quality figure in
+   the project depends on that assumption.
 
-judge_answer_quality() below is a THIRD, separate scoring mechanism for a
-different situation: the live payments/retail_bank pipeline answers free-text
-Bitext-style queries with no ground-truth label at all, so neither
-banking77_quality nor finqa_quality applies. It uses Claude as an LLM-judge
-instead (the same general approach as MT-Bench / Prometheus-style academic
-evaluation) -- necessarily a softer, more subjective signal than exact
-ground-truth matching, and worth naming as a limitation in your methodology
-section for exactly that reason.
+2. Ground-truth helpers from the project's first design (banking77_quality, finqa_quality, score). They compare an
+   answer with a known label or number and combine quality with cost as Q(x) - lambda x cost. They need labelled
+   data (Banking77, FinQA), so the live pipeline, which answers free-text questions that have no label, does not
+   use them.
 
-Part of the src/ package -- run from the project root with:
-    python -m src.quality
+The rubric lives in one place, _QUALITY_RUBRIC, so editing it changes every path that scores quality: the pipeline,
+the backfill script and the local judge.
+
+Quick demo (no API call: it only exercises the ground-truth helpers):    python -m src.quality
 """
 import json
 import re
@@ -123,7 +122,8 @@ def judge_answer_quality_local(model: str, query: str, answer: str, ollama_url: 
     Claude -- cheap and fast enough to run over an entire run's worth of rows, but a weaker,
     less validated judge (see the module-level note above). Intended as a broad first-pass
     signal, not as the numbers you report: compare against judge_answer_quality() on an
-    overlapping sample (scripts/compare_quality_judges.py) before trusting it on its own for
+    overlapping sample (run scripts/backfill_quality_scores.py both ways, with and without
+    --judge-local, and compare the two sets of columns) before trusting it on its own for
     anything you cite. model must already be pulled in Ollama (e.g. "llama3.2:3b") -- a
     model NOT already fine-tuned as one of your production assistants is the right choice
     here, so the judge isn't evaluating its own family's output style.

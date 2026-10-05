@@ -20,6 +20,9 @@ HISTORY = f"{LOGS_DIR}/results_history.csv"
 
 
 def main():
+    """Append the run in results_log_combined.csv to results_history.csv if its run_id is missing
+    there, which happens when the history file was open elsewhere as the run finished.
+    """
     if not os.path.exists(COMBINED):
         print(f"{COMBINED} not found -- nothing to recover.")
         return

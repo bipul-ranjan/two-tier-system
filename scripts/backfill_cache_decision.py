@@ -34,6 +34,9 @@ def relabel(df: pd.DataFrame) -> int:
 
 
 def main():
+    """Relabel cache hits as CACHE in results_history.csv (locked while it is rewritten) and in every
+    per-unit and combined log, and report how many rows changed in each file.
+    """
     if not os.path.exists(HISTORY_PATH):
         raise FileNotFoundError(f"{HISTORY_PATH} not found -- nothing to relabel")
 

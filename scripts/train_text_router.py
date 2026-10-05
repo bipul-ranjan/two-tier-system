@@ -39,6 +39,9 @@ FALLBACK_CLAUDE_QUALITY = 4.38
 
 
 def load_history(path: str) -> pd.DataFrame:
+    """Load the results history and check it has the columns and enough rows (200, over at least 5
+    intents) to train the router on. Exits with a message that says what to run if not.
+    """
     if not os.path.exists(path):
         raise SystemExit(f"{path} not found -- run this from the project root, or pass --history")
     df = pd.read_csv(path)
@@ -92,6 +95,10 @@ def delivered_per_unit(df, score, frac, claude_q):
 
 
 def main(argv=None) -> int:
+    """Evaluate the router on held-out intents, set the cut-point from a target escalation share, train
+    the final model on every row, and save it with its info file and the list of words it weighs
+    most.
+    """
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--history", default=DEFAULT_HISTORY)
     ap.add_argument("--target-share", type=float, default=TARGET_SHARE, help="share of questions to escalate (default 0.30)")

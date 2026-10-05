@@ -21,6 +21,9 @@ DEFAULT_RUN_ID = "run-default"
 
 
 def main():
+    """Add a run_id column to each existing log (the id is the first argument, default "run-default"),
+    and leave any file that already has one alone.
+    """
     run_id = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_RUN_ID
     print(f"Run id for existing records: {run_id}\n")
 

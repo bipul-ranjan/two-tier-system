@@ -14,6 +14,13 @@ Bitext Innovations, "Bitext-retail-banking-llm-chatbot-training-dataset", 2024.
 
 Run once, from the project root:
     python scripts/fetch_bitext_banking.py
+
+Outputs, in data/raw/ (each as JSONL for fine-tuning and CSV for inspection):
+    bitext_payments      the CARD, TRANSFER, ATM and FEES categories    -> training data for the Payment Assistant
+    bitext_retail_bank   the ACCOUNT, LOAN, PASSWORD, CONTACT and FIND categories -> training data for the Retail Bank Assistant
+Version 2 of the Payment Assistant trained on 10,902 payments rows and the Retail Bank Assistant on 14,643 real rows
+plus 4,200 synthetic exception rows (scripts/generate_exception_training_data.py). Needs the datasets package and an
+internet connection. Safe to re-run: if all four files exist, nothing is downloaded.
 """
 import os
 import json
@@ -29,16 +36,21 @@ RETAIL_BANK_CATEGORIES = {"ACCOUNT", "LOAN", "PASSWORD", "CONTACT", "FIND"}
 
 
 def write_jsonl(rows: list, path: str):
+    """Write one JSON object per line, the format Unsloth and TRL read for fine-tuning."""
     with open(path, "w", encoding="utf-8") as f:
         for row in rows:
             f.write(json.dumps(row) + "\n")
 
 
 def write_csv(rows: list, path: str):
+    """Write rows as a CSV, for inspection in pandas or Excel."""
     pd.DataFrame(rows).to_csv(path, index=False)
 
 
 def fetch_and_split():
+    """Download the Bitext dataset from Hugging Face, split it by category into the payments and
+    retail-bank files (JSONL and CSV each), and skip everything if all four files already exist.
+    """
     payments_jsonl = f"{OUT_DIR}/bitext_payments.jsonl"
     payments_csv = f"{OUT_DIR}/bitext_payments.csv"
     retail_jsonl = f"{OUT_DIR}/bitext_retail_bank.jsonl"
