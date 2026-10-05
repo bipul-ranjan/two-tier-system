@@ -414,6 +414,7 @@ See [tests/README.md](tests/README.md).
 |---|---|
 | This file | Overview, installation and every command |
 | [User-Manual/Two-Tier-System-User-Manual.md](User-Manual/Two-Tier-System-User-Manual.md) (and `.pdf`) | The complete beginner's manual, with no prior knowledge assumed |
+| [User-Manual/Mac-Setup-Manual.md](User-Manual/Mac-Setup-Manual.md) (and `.pdf`) | Setting everything up on a new Mac, including training the small models on Google Colab and bringing them back |
 | [src/README.md](src/README.md) | The pipeline code, module by module, and the quality rubric |
 | [scripts/README.md](scripts/README.md) | Every script, its options and when to run it |
 | [training/README.md](training/README.md) | Fine-tuning on Colab and importing the models into Ollama |
