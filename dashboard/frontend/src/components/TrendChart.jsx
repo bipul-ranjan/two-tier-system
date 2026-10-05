@@ -37,6 +37,7 @@ const METRICS = [
 
 const MODEL_LABEL_Y = 10;
 const PROMPT_LABEL_Y = 24;
+const ROUTER_LABEL_Y = 38;
 
 // Anchor a marker label away from the chart edge it's nearest to, so it grows inward instead
 // of clipping off the side -- same fix as ResolutionTrend.jsx, needed here too since "new
@@ -64,6 +65,7 @@ export default function TrendChart({ runs, selectedId }) {
     ...Object.fromEntries(units.map((u) => [u, r.units[u]?.[metric.key] ?? null])),
     modelsChanged: i > 0 && JSON.stringify(r.models) !== JSON.stringify(runs[i - 1].models),
     promptChanged: i > 0 && r.claude_prompt_version != null && r.claude_prompt_version !== runs[i - 1].claude_prompt_version,
+    routerChanged: i > 0 && r.router != null && r.router !== runs[i - 1].router,
   }));
 
   const known = metric.known ? runs.reduce((sum, r) => sum + metric.known(r), 0) : null;
@@ -80,7 +82,7 @@ export default function TrendChart({ runs, selectedId }) {
       </div>
       <div className="chart" style={{ height: 312 }}>
         <ResponsiveContainer>
-          <LineChart data={data} margin={{ top: 36, right: 30, bottom: 8, left: 0 }}>
+          <LineChart data={data} margin={{ top: 50, right: 30, bottom: 8, left: 0 }}>
             <CartesianGrid stroke={C.grid} vertical={false} />
             <XAxis dataKey="id" padding={{ left: 24, right: 24 }} tickFormatter={runTick} tick={{ fontSize: 11, fill: C.muted }} stroke={C.grid} minTickGap={16} />
             <YAxis domain={metric.domain} tickFormatter={metric.tick} tick={{ fontSize: 12, fill: C.muted }} axisLine={false} tickLine={false} width={48} />
@@ -92,6 +94,10 @@ export default function TrendChart({ runs, selectedId }) {
             {data.filter((d) => d.promptChanged).map((d) => (
               <ReferenceLine key={`p-${d.id}`} x={d.id} stroke={C.claudePrompt} strokeDasharray="6 2"
                 label={markerLabel("new Claude prompt", C.claudePrompt, PROMPT_LABEL_Y, data.indexOf(d), data.length)} />
+            ))}
+            {data.filter((d) => d.routerChanged).map((d) => (
+              <ReferenceLine key={`r-${d.id}`} x={d.id} stroke={C.router} strokeDasharray="3 3"
+                label={markerLabel("new router", C.router, ROUTER_LABEL_Y, data.indexOf(d), data.length)} />
             ))}
             <Tooltip
               isAnimationActive={false}

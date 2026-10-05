@@ -26,6 +26,14 @@ directory.
 | `test_exact_threshold_resolves_locally` | A score exactly at the threshold counts as `LOCAL`, not `ESCALATE` — confirms the `>=` boundary behaves as intended |
 | `test_custom_threshold_override` | Passing a custom threshold actually changes the routing decision |
 
+## Learned router tests (`test_learned_router.py`)
+
+Fast tests for `src/learned_router.py` on small synthetic data (no Ollama, no API key, no history file needed):
+good answers get higher predicted quality than bad ones, a single prediction matches the batch, the router
+escalates exactly below its cut-point (and keeps a prediction exactly at it), an unfamiliar business unit
+and empty text do not crash it, the saved model loads back identically, and a missing, corrupt,
+version-mismatched or cut-point-less model file is refused with a message that says how to retrain.
+
 ## What's not covered yet, and why
 
 `tier1.py` and `tier2_escalate.py` aren't tested here because they make

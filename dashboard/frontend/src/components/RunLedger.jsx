@@ -5,6 +5,7 @@ import { fmtConf, fmtPct, runLabel } from "../format";
 export default function RunLedger({ runs, selectedId, onPick, onOverview, overviewSelected }) {
   const latestId = runs.length ? runs[runs.length - 1].run_id : null;
   const changed = runs.map((r, i) => i > 0 && JSON.stringify(r.models) !== JSON.stringify(runs[i - 1].models));
+  const routerNew = runs.map((r, i) => i > 0 && r.router !== runs[i - 1].router);   // a retrained router, or a switch of router
 
   return (
     <nav className="ledger" aria-label="Runs">
@@ -15,9 +16,9 @@ export default function RunLedger({ runs, selectedId, onPick, onOverview, overvi
       <p className="ledger-note">Newest first. The bar is each run's average confidence.</p>
       <ul>
         {runs
-          .map((r, i) => ({ r, isChanged: changed[i] }))
+          .map((r, i) => ({ r, isChanged: changed[i], isRouterNew: routerNew[i] }))
           .reverse()
-          .map(({ r, isChanged }) => {
+          .map(({ r, isChanged, isRouterNew }) => {
             const selected = !overviewSelected && r.run_id === selectedId;
             const conf = r.overall.avg_conf;
             return (
@@ -27,6 +28,7 @@ export default function RunLedger({ runs, selectedId, onPick, onOverview, overvi
                     <span className="run-name">{runLabel(r.run_id)}</span>
                     {r.run_id === latestId && <span className="tag">latest</span>}
                     {isChanged && <span className="tag tag-models">new models</span>}
+                    {isRouterNew && <span className="tag tag-router">new router</span>}
                   </span>
                   <span className="run-meta">
                     {r.rows} queries, {fmtPct(r.overall.local_pct)} answered locally

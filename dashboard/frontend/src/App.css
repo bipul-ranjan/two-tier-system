@@ -92,6 +92,7 @@ code, .code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; f
 /* tags and pills */
 .tag { font-size: 11px; font-weight: 500; padding: 1px 8px; border-radius: 999px; background: var(--rule); color: var(--ink); margin-left: 8px; white-space: nowrap; }
 .tag-models { background: #e4e3f4; color: var(--tier2); }
+.tag-router { background: #f5ecc8; color: #7d6608; }
 .tag-exc { background: #f8dce7; color: var(--exception); }
 .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 500; white-space: nowrap; }
 .pill-local { background: var(--local-tint); color: #0a5e60; }
@@ -118,11 +119,11 @@ code, .code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; f
 .table td { padding: 10px 14px 10px 0; border-bottom: 1px solid var(--rule); vertical-align: middle; }
 .table .num { text-align: right; padding-right: 20px; }
 .table .nowrap { white-space: nowrap; color: var(--muted); font-size: 13px; }
-.recent .query { max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.recent .scenario { min-width: 190px; }
+.recent .query { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent .scenario { min-width: 165px; }
 .scenario-name { overflow-wrap: anywhere; }
 .scenario-unit { display: block; color: var(--muted); font-size: 12.5px; }
-.recent .num { padding-right: 16px; }
+.recent .num { padding-right: 12px; }
 .meter-cell { display: inline-flex; align-items: center; gap: 10px; min-width: 130px; }
 .meter { width: 84px; height: 6px; background: var(--rule); border-radius: 3px; overflow: hidden; }
 .meter i { display: block; height: 100%; background: var(--local); }

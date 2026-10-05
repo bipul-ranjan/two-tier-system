@@ -1,0 +1,36 @@
+(venv) PS D:\One-Drive-Latest\OneDrive\01_Education\LJMU_MSRESEARCH\D-CASCADE\two-tier-system> python scripts/train_router.py --mode finetune --report-only
+6310 rows, 50 intents, 5 folds that each hold out whole intents. Mode: finetune (cpu).
+fold 1/5: already done
+
+=== Does a small language model read the answer better than confidence does? ===
+rows evaluated: 1260 (payments 581, retail_bank 679) from 10 intents, every one scored by a model that never saw its intent.
+
+Spearman correlation with Claude's quality score, within each unit (95% interval in brackets):
+                                  payments               retail_bank   mean of units
+  confidence          +0.444 [+0.38,+0.51]      +0.047 [-0.03,+0.12]          +0.246
+  text probe          +0.518 [+0.46,+0.58]      +0.457 [+0.40,+0.51]          +0.488
+  router              +0.555 [+0.50,+0.61]      +0.542 [+0.49,+0.59]          +0.549
+
+AUC for spotting a Tier 1 answer scoring below 3.5 (0.5 = chance): confidence 0.581 | text probe 0.735 | router 0.780
+
+Which quality dimension does each signal track? (Spearman within unit, averaged over units)
+                   correctness  completeness          tone        safety       clarity
+  confidence            +0.220        +0.220        +0.182        +0.177        +0.227
+  text probe            +0.405        +0.527        +0.306        +0.309        +0.461
+  router                +0.464        +0.593        +0.333        +0.349        +0.500
+
+Average quality delivered at the same escalation rate (kept rows = real Tier 1 quality, escalated rows = Claude's 4.38):
+   escalate |  random | confidence | text probe |  router |  oracle
+       20% |   3.643 |      3.693 |      3.721 |   3.742 |   3.819
+       30% |   3.735 |      3.791 |      3.828 |   3.850 |   3.949
+       40% |   3.825 |      3.885 |      3.941 |   3.957 |   4.063
+  share of the possible gain (random -> oracle) captured at 30%: confidence 26% | text probe 44% | router 54%
+
+Is the difference beyond noise? Delivered quality at 30%, 95% interval resampling whole intents:
+  router minus confidence  +0.059   [+0.030, +0.084]   beyond noise
+  router minus text probe  +0.022   [-0.004, +0.038]   cannot be told apart from zero
+
+(Only 90 evaluated rows have reward-model scores -- too few to compare on; run more folds.)
+
+Within units the router is above the text probe (+0.549 vs +0.488) and above confidence (+0.549 vs +0.246). Differences under about 0.1 are within noise.
+(venv) PS D:\One-Drive-Latest\OneDrive\01_Education\LJMU_MSRESEARCH\D-CASCADE\two-tier-system>

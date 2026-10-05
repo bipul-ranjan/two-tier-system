@@ -7,12 +7,25 @@ cascade, and log every decision for later evaluation.
   PAYMENT_EXCEPTION -> payments; ACCOUNT/LOAN/PASSWORD/CONTACT/FIND/
   RETAIL_EXCEPTION -> retail_bank), so each query goes to the right
   assistant instead of an arbitrary split.
-- Threshold is set per business unit (and per normal/exception scenario within
-  it) via the THRESHOLDS dict below, since different Tier 1 models can have very
-  different confidence distributions -- a smaller fine-tuned model naturally
-  produces less confident answers even when its content is fine.
-- Both confidence methods (avg and min) are logged for every query; routing
-  uses confidence_score (currently = the avg method) via router.route().
+- Routing is done by the LEARNED ROUTER (src/learned_router.py) by default: once Tier 1 has
+  answered, the router predicts how good that answer is from the question, the answer, Tier 1's
+  confidence and the business unit, and the question is escalated when the prediction falls
+  below a cut-point. Train it first with scripts/train_text_router.py. If the model file is
+  missing the run stops with a clear message; it never silently falls back to another rule.
+  Flow:  query -> Tier 1 -> response -> router -> escalate? -> (no) send Tier 1's answer
+                                                           -> (yes) cache, then Claude -> send
+  Pass --threshold-router to use the older rule instead (below), e.g. to compare the two
+  routers on the same sample.
+- The older threshold rule: a confidence pass mark per business unit (and per normal/exception
+  scenario within it) via the THRESHOLDS dict below, since different Tier 1 models can have very
+  different confidence distributions -- a smaller fine-tuned model naturally produces less
+  confident answers even when its content is fine.
+- Both confidence methods (avg and min) are logged for every query. The threshold rule routes
+  on confidence_score (currently = the avg method) via router.route(); the learned router uses
+  the avg confidence as one of its inputs.
+- Every row logs which router decided (router), the predicted quality (router_predicted_quality)
+  and the cut-point (router_cutoff). Under the threshold rule threshold_used is filled and the
+  predicted quality and cut-point are blank; under the learned router it is the other way round.
 - Latency is logged three ways per query, so it can be evaluated properly:
     request_start_time / response_end_time  wall-clock timestamps
     tier1_latency_ms, tier2_latency_ms      time spent in each tier
@@ -43,6 +56,7 @@ import requests
 from .config import OLLAMA_URL, get_model_for_unit
 from .tier1 import ask_tier1
 from .router import route
+from .learned_router import TextProbeRouter, RouterNotTrainedError
 from .tier2_escalate import ask_tier2, estimate_cost, client as anthropic_client
 from .quality import judge_answer_quality, judge_answer_quality_local, QUALITY_DIMS
 from .semantic_cache import SemanticCacheIndex, try_semantic_cache
@@ -294,7 +308,7 @@ def unload_models(models: list) -> None:
 
 
 def process_query(query: str, business_unit: str, category: str, intent: str, is_exception: bool, run_id: str,
-                   cache_index: SemanticCacheIndex = None) -> dict:
+                   cache_index: SemanticCacheIndex = None, router: TextProbeRouter = None) -> dict:
     threshold = get_threshold(business_unit, is_exception)
 
     start_dt = datetime.now()
@@ -303,7 +317,15 @@ def process_query(query: str, business_unit: str, category: str, intent: str, is
     t1_result = ask_tier1(query, business_unit=business_unit, keep_alive=KEEP_ALIVE)
     tier1_latency_ms = (time.perf_counter() - t_query_start) * 1000
 
-    decision = route(t1_result["confidence_score"], threshold)
+    if router is not None:
+        # The learned router reads the question, Tier 1's answer, its confidence and the unit,
+        # predicts the answer's quality, and escalates below its cut-point.
+        predicted_quality = router.predict_one(query, t1_result["answer"], t1_result["confidence_score_avg"], business_unit)
+        decision = router.decide(predicted_quality)
+        router_name, router_cutoff, threshold_logged = router.version, router.cutoff, None
+    else:
+        decision = route(t1_result["confidence_score"], threshold)
+        predicted_quality, router_name, router_cutoff, threshold_logged = None, "threshold", None, threshold
 
     print(f"Start Time     : {start_dt.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Business Unit  : {t1_result['business_unit']} ({t1_result['assistant_name']})")
@@ -312,7 +334,10 @@ def process_query(query: str, business_unit: str, category: str, intent: str, is
     print(f"Tier 1 Answer  : {t1_result['answer'][:100]}{'...' if len(t1_result['answer']) > 100 else ''}")
     print(f"Confidence AVG : {t1_result['confidence_score_avg']:.4f}")
     print(f"Confidence MIN : {t1_result['confidence_score_min']:.4f}")
-    print(f"Threshold      : {threshold}")
+    if router is not None:
+        print(f"Router         : {router_name} | predicted quality {predicted_quality:.2f} (cut-point {router_cutoff:.2f})")
+    else:
+        print(f"Threshold      : {threshold}")
     print(f"Decision       : {decision}")
 
     row = {
@@ -329,7 +354,10 @@ def process_query(query: str, business_unit: str, category: str, intent: str, is
         "tier1_answer": t1_result["answer"],
         "tier1_confidence_avg": t1_result["confidence_score_avg"],
         "tier1_confidence_min": t1_result["confidence_score_min"],
-        "threshold_used": threshold,
+        "threshold_used": threshold_logged,
+        "router": router_name,
+        "router_predicted_quality": round(predicted_quality, 4) if predicted_quality is not None else None,
+        "router_cutoff": round(router_cutoff, 4) if router_cutoff is not None else None,
         "decision": decision,
         "tier1_latency_ms": round(tier1_latency_ms, 1),
         "tier2_latency_ms": None,
@@ -490,7 +518,7 @@ def score_quality_pass_local(rows: list, judge_model: str) -> None:
 
 
 def run_pipeline(sample: pd.DataFrame, log_path: str = None, score_quality: bool = False, score_quality_local: str = None,
-                  use_semantic_cache: bool = False) -> pd.DataFrame:
+                  use_semantic_cache: bool = False, use_learned_router: bool = False) -> pd.DataFrame:
     """Run every sampled row through the cascade. Writes one combined log
     (read by evaluate.py) plus one log per business unit.
 
@@ -500,7 +528,19 @@ def run_pipeline(sample: pd.DataFrame, log_path: str = None, score_quality: bool
     the cache index once, from results_history.csv as it stands at the start of this run (so
     cache entries only ever come from genuinely earlier runs' Tier 2 answers, never from rows
     being written during this same run).
+
+    use_learned_router: route with the trained text router instead of the confidence threshold.
+    The command line turns this on by default. The model is loaded first of all, so a missing or
+    unusable model file stops the run immediately with a clear message, before any model is
+    loaded and before anything is locked.
     """
+    router = None
+    if use_learned_router:
+        try:
+            router = TextProbeRouter.load()
+        except RouterNotTrainedError as e:
+            raise SystemExit(f"\n{e}")
+        print(f"Router: learned ({router.version}). Escalates answers predicted to score below {router.cutoff:.2f}.")
     if log_path is None:
         log_path = f"{LOGS_DIR}/results_log_combined.csv"
     os.makedirs(LOGS_DIR, exist_ok=True)
@@ -548,7 +588,7 @@ def run_pipeline(sample: pd.DataFrame, log_path: str = None, score_quality: bool
             for r in sample.itertuples(index=False):
                 try:
                     rows.append(process_query(r.instruction, r.business_unit, r.category, r.intent, bool(r.is_exception), run_id,
-                                               cache_index=cache_index))
+                                               cache_index=cache_index, router=router))
                 except Exception as e:
                     failed.append({"query": r.instruction, "business_unit": r.business_unit, "error": str(e)})
                     print(f"  WARNING: row failed and will be skipped ({type(e).__name__}: {e})")
@@ -590,26 +630,33 @@ def run_pipeline(sample: pd.DataFrame, log_path: str = None, score_quality: bool
     print(df.groupby("is_exception")["decision"].value_counts().unstack(fill_value=0).to_string())
     print("\nMedian total latency (ms) by decision:")
     print(df.groupby("decision")["total_latency_ms"].median().round(0).to_string())
+    if router is not None:
+        went_up = df["decision"] != "LOCAL"      # the router said escalate: either the cache or Claude answered
+        print(f"\nRouter {router.version}: escalated {went_up.mean():.0%} of questions "
+              f"({', '.join(f'{u} {went_up[df.business_unit == u].mean():.0%}' for u in sorted(df.business_unit.unique()))}); "
+              f"average predicted quality {df['router_predicted_quality'].mean():.2f} against a cut-point of {router.cutoff:.2f}.")
     return df
 
 
 def parse_cli_args(args: list) -> tuple:
     """Simple positional-or-flag parsing, kept deliberately lightweight rather than pulling
-    in argparse for a few options. Returns (n, score_quality, local_judge_model, use_semantic_cache).
+    in argparse for a few options. Returns (n, score_quality, local_judge_model, use_semantic_cache,
+    use_learned_router).
 
-    Both the semantic cache and Claude quality evaluation are ON by default; each has an
-    explicit opt-out flag:
+    The learned router, the semantic cache and Claude quality evaluation are all ON by default;
+    each has an explicit opt-out flag:
         python -m src.pipeline 100                  # cache ON, quality evaluation ON
         python -m src.pipeline 100 --nocache        # skip the semantic cache
         python -m src.pipeline 100 --noquality      # skip the post-run Claude quality evaluation
         python -m src.pipeline 100 --nocache --noquality
+        python -m src.pipeline 100 --threshold-router   # route with the old confidence pass mark instead
         python -m src.pipeline 100 --score-quality-local llama3.2:3b   # extra, opt-in local judge
     """
-    flags = {"--nocache", "--noquality", "--score-quality-local"}
+    flags = {"--nocache", "--noquality", "--threshold-router", "--score-quality-local"}
     unknown = [a for a in args if a.startswith("--") and a not in flags]
     if unknown:
         raise SystemExit(f"Unknown option(s): {' '.join(unknown)}. "
-                         f"Valid options: --nocache, --noquality, --score-quality-local <model>")
+                         f"Valid options: --nocache, --noquality, --threshold-router, --score-quality-local <model>")
     local_judge_model = None
     if "--score-quality-local" in args:
         idx = args.index("--score-quality-local")
@@ -618,11 +665,16 @@ def parse_cli_args(args: list) -> tuple:
         local_judge_model = args[idx + 1]
     positional = [a for a in args if a not in flags and a != local_judge_model]
     n = int(positional[0]) if positional else N_SAMPLES
-    return n, "--noquality" not in args, local_judge_model, "--nocache" not in args
+    return n, "--noquality" not in args, local_judge_model, "--nocache" not in args, "--threshold-router" not in args
 
 
 def main(argv=None) -> None:
-    n, score_quality, local_judge_model, use_semantic_cache = parse_cli_args(sys.argv[1:] if argv is None else argv)
+    n, score_quality, local_judge_model, use_semantic_cache, use_learned_router = parse_cli_args(sys.argv[1:] if argv is None else argv)
+    if use_learned_router:
+        print("Router: LEARNED (default). After Tier 1 answers, a trained model predicts how good the answer is and "
+              "escalates it if the prediction is below its cut-point. Pass --threshold-router for the old confidence rule.")
+    else:
+        print("Router: THRESHOLD rule (--threshold-router), the older confidence pass mark for each business unit.")
     if use_semantic_cache:
         print("Semantic cache: ON (default). An escalation first checks for a close-enough past Claude answer "
               "before calling Claude again. Pass --nocache to turn it off.")
@@ -639,7 +691,7 @@ def main(argv=None) -> None:
     if local_judge_model:
         print(f"Local quality first-pass is ON via {local_judge_model}: cheap/free, but not the numbers to report -- see scripts/compare_quality_judges.py.")
     run_pipeline(load_random_sample(n), score_quality=score_quality, score_quality_local=local_judge_model,
-                 use_semantic_cache=use_semantic_cache)
+                 use_semantic_cache=use_semantic_cache, use_learned_router=use_learned_router)
 
 
 if __name__ == "__main__":

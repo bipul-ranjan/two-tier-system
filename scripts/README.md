@@ -47,3 +47,21 @@ etc.), that's the signal to write a script and drop it in here rather
 than continuing to type it by hand — same reasoning as `fetch_data.py`:
 a script is reproducible, reviewable in Git, and doesn't rely on you
 remembering the exact steps next time.
+
+## `train_text_router.py`
+
+Trains the learned router the pipeline uses by default (`src/learned_router.py`). It learns from your own
+results history: for each logged question it has Tier 1's answer and Claude's mark for it, and it learns
+to predict that mark from the question, the answer, Tier 1's confidence and the business unit. It first
+evaluates itself honestly (five folds that each hold out whole intents), then sets the cut-point from
+those held-out predictions so that a chosen share of questions is escalated, then trains on every row and
+saves `models/router/text_probe_router.joblib` plus a plain-text list of the words it weighs most.
+
+```
+python scripts/train_text_router.py                       # escalate about 30% of questions
+python scripts/train_text_router.py --target-share 0.25   # escalate fewer
+```
+
+Takes seconds. Run it once before the first pipeline run, and again whenever the Tier 1 models change or
+the history has grown. The pipeline stops with a message if the model file is missing; it never falls back
+to another rule silently.

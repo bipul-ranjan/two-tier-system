@@ -1,0 +1,76 @@
+(venv) PS D:\One-Drive-Latest\OneDrive\01_Education\LJMU_MSRESEARCH\D-CASCADE\two-tier-system> python scripts/train_router.py --mode finetune --stop-after 1
+6310 rows, 50 intents, 5 folds that each hold out whole intents. Mode: finetune (cpu).
+fold 1/5: training on 5050 rows, testing on 1260 rows from unseen intents (cpu)
+Loading weights: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 103/103 [00:00<00:00, 557.36it/s]
+    fold 1 epoch 1/3 step 25/948 loss 0.572  (about 61 min left)
+    fold 1 epoch 1/3 step 50/948 loss 0.751  (about 56 min left)
+    fold 1 epoch 1/3 step 75/948 loss 0.908  (about 53 min left)
+    fold 1 epoch 1/3 step 100/948 loss 0.543  (about 57 min left)
+    fold 1 epoch 1/3 step 125/948 loss 0.580  (about 54 min left)
+    fold 1 epoch 1/3 step 150/948 loss 0.690  (about 51 min left)
+    fold 1 epoch 1/3 step 175/948 loss 0.691  (about 49 min left)
+    fold 1 epoch 1/3 step 200/948 loss 0.558  (about 48 min left)
+    fold 1 epoch 1/3 step 225/948 loss 0.586  (about 46 min left)
+    fold 1 epoch 1/3 step 250/948 loss 0.500  (about 44 min left)
+    fold 1 epoch 1/3 step 275/948 loss 0.601  (about 42 min left)
+    fold 1 epoch 1/3 step 300/948 loss 0.777  (about 41 min left)
+    fold 1 epoch 2/3 step 325/948 loss 0.580  (about 39 min left)
+    fold 1 epoch 2/3 step 350/948 loss 0.488  (about 37 min left)
+    fold 1 epoch 2/3 step 375/948 loss 0.334  (about 36 min left)
+    fold 1 epoch 2/3 step 400/948 loss 0.752  (about 34 min left)
+    fold 1 epoch 2/3 step 425/948 loss 0.520  (about 33 min left)
+    fold 1 epoch 2/3 step 450/948 loss 0.542  (about 31 min left)
+    fold 1 epoch 2/3 step 475/948 loss 0.367  (about 29 min left)
+    fold 1 epoch 2/3 step 500/948 loss 0.390  (about 28 min left)
+    fold 1 epoch 2/3 step 525/948 loss 0.471  (about 26 min left)
+    fold 1 epoch 2/3 step 550/948 loss 0.427  (about 24 min left)
+    fold 1 epoch 2/3 step 575/948 loss 0.399  (about 23 min left)
+    fold 1 epoch 2/3 step 600/948 loss 0.571  (about 21 min left)
+    fold 1 epoch 2/3 step 625/948 loss 0.301  (about 20 min left)
+    fold 1 epoch 3/3 step 650/948 loss 0.361  (about 18 min left)
+    fold 1 epoch 3/3 step 675/948 loss 0.343  (about 16 min left)
+    fold 1 epoch 3/3 step 700/948 loss 0.432  (about 15 min left)
+    fold 1 epoch 3/3 step 725/948 loss 0.483  (about 13 min left)
+    fold 1 epoch 3/3 step 750/948 loss 0.314  (about 12 min left)
+    fold 1 epoch 3/3 step 775/948 loss 0.661  (about 10 min left)
+    fold 1 epoch 3/3 step 800/948 loss 0.583  (about 9 min left)
+    fold 1 epoch 3/3 step 825/948 loss 0.468  (about 7 min left)
+    fold 1 epoch 3/3 step 850/948 loss 0.681  (about 6 min left)
+    fold 1 epoch 3/3 step 875/948 loss 0.313  (about 4 min left)
+    fold 1 epoch 3/3 step 900/948 loss 0.358  (about 3 min left)
+    fold 1 epoch 3/3 step 925/948 loss 0.331  (about 1 min left)
+
+=== Does a small language model read the answer better than confidence does? ===
+rows evaluated: 1260 (payments 581, retail_bank 679) from 10 intents, every one scored by a model that never saw its intent.
+
+Spearman correlation with Claude's quality score, within each unit (95% interval in brackets):
+                                  payments               retail_bank   mean of units
+  confidence          +0.444 [+0.38,+0.51]      +0.047 [-0.03,+0.12]          +0.246
+  text probe          +0.518 [+0.46,+0.58]      +0.457 [+0.40,+0.51]          +0.488
+Traceback (most recent call last):
+  File "D:\One-Drive-Latest\OneDrive\01_Education\LJMU_MSRESEARCH\D-CASCADE\two-tier-system\scripts\train_router.py", line 364, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "D:\One-Drive-Latest\OneDrive\01_Education\LJMU_MSRESEARCH\D-CASCADE\two-tier-system\scripts\train_router.py", line 359, in main
+    report(S, claude_quality_of(pd.read_csv(args.history)), rm_rows)
+    ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\One-Drive-Latest\OneDrive\01_Education\LJMU_MSRESEARCH\D-CASCADE\two-tier-system\scripts\train_router.py", line 278, in report
+    res = table(S, signals, "Spearman correlation with Claude's quality score, within each unit (95% interval in brackets):")
+  File "D:\One-Drive-Latest\OneDrive\01_Education\LJMU_MSRESEARCH\D-CASCADE\two-tier-system\scripts\train_router.py", line 272, in table
+    r, lo, hi = spearman(g[col], g["quality_draft_overall"]); rs.append(r)
+                ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\One-Drive-Latest\OneDrive\01_Education\LJMU_MSRESEARCH\D-CASCADE\two-tier-system\scripts\probe_reward_model.py", line 176, in spearman
+    r = spearmanr(a, b)[0]
+        ~~~~~~~~~^^^^^^
+  File "D:\One-Drive-Latest\OneDrive\01_Education\LJMU_MSRESEARCH\D-CASCADE\two-tier-system\venv\Lib\site-packages\scipy\stats\_stats_py.py", line 5446, in spearmanr
+    rs = np.corrcoef(a_ranked, rowvar=axisout)
+  File "D:\One-Drive-Latest\OneDrive\01_Education\LJMU_MSRESEARCH\D-CASCADE\two-tier-system\venv\Lib\site-packages\numpy\lib\_function_base_impl.py", line 3028, in corrcoef
+    c = cov(x, y, rowvar, dtype=dtype)
+  File "D:\One-Drive-Latest\OneDrive\01_Education\LJMU_MSRESEARCH\D-CASCADE\two-tier-system\venv\Lib\site-packages\numpy\lib\_function_base_impl.py", line 2877, in cov
+    avg, w_sum = average(X, axis=1, weights=w, returned=True)
+                 ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\One-Drive-Latest\OneDrive\01_Education\LJMU_MSRESEARCH\D-CASCADE\two-tier-system\venv\Lib\site-packages\numpy\lib\_function_base_impl.py", line 607, in average
+    if scl.shape != avg_as_array.shape:
+       ^^^^^^^^^
+AttributeError: 'float' object has no attribute 'shape'
+(venv) PS D:\One-Drive-Latest\OneDrive\01_Education\LJMU_MSRESEARCH\D-CASCADE\two-tier-system>

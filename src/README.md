@@ -13,6 +13,7 @@ files (`from .tier1 import ask_tier1`, etc.) resolve correctly.
 | `config.py` | Maps each business unit to the local model it uses (payments → phi3:mini, retail_bank → qwen2.5:1.5b). Edit this file to add a new business unit or change which model one uses. |
 | `tier1.py` | Sends a query to the local SLM (via Ollama) and parses out the intent + confidence score. This is the "cheap, fast" tier — it never leaves your machine. |
 | `router.py` | Takes Tier 1's confidence score and decides: resolve locally (`LOCAL`) or send it up to Tier 2 (`ESCALATE`). The whole cost-saving argument of this project lives in this one small file. |
+| `learned_router.py` | The default router. Once Tier 1 has answered, it predicts how good that answer is (1-5) from the question, the answer, Tier 1's confidence and the business unit, and escalates when the prediction is below a cut-point. Trained by `scripts/train_text_router.py`. `router.py` above is the older confidence-threshold rule, still available with `--threshold-router`. |
 | `tier2_escalate.py` | Sends escalated queries to a paid LLM API (e.g. GPT-4o-mini) and estimates the token cost of that call. This is the "expensive, only-when-needed" tier. |
 | `pipeline.py` | Wires the above three together — runs a batch of queries through Tier 1, routes them, escalates where needed, and logs every decision to `results/logs/`. Run this to actually generate data. |
 | `evaluate.py` | Reads the logs `pipeline.py` produced and computes the headline numbers (resolution rate, cost reduction, latency, per-business-unit breakdown) into `results/tables/`. Run this after `pipeline.py`, not instead of it. |
@@ -23,6 +24,8 @@ files (`from .tier1 import ask_tier1`, etc.) resolve correctly.
 python -m src.config       # sanity check only — no Ollama call
 python -m src.tier1        # sanity check — one real Ollama call
 python -m src.router       # sanity check only — no dependencies
+python scripts/train_text_router.py   # once, and after retraining Tier 1: trains the router (seconds)
 python -m src.pipeline     # the real run — produces results/logs/*.csv
+python -m src.pipeline --threshold-router   # same run, routed by the older confidence rule
 python -m src.evaluate     # produces results/tables/*.csv from those logs
 ```

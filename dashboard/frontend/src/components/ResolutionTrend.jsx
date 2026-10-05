@@ -7,6 +7,7 @@ const fmtThreshold = (t) => (t && t.length ? t.map((v) => v.toFixed(2)).join("/"
 const MODEL_LABEL_Y = 10;
 const THRESHOLD_LABEL_Y = 24;
 const PROMPT_LABEL_Y = 38;
+const ROUTER_LABEL_Y = 52;
 
 // Anchor a marker label away from the chart edge it's nearest to, so it grows inward instead
 // of clipping off the side -- this specifically fixes a label on the last (or first) point
@@ -60,12 +61,17 @@ export default function ResolutionTrend({ runs, selectedId }) {
             threshold: thisThreshold,
             thresholdPct: thresholds.length === 1 ? thresholds[0] * 100 : null,
             promptVersion: thisPromptVersion,
+            router: r.router,
+            cutoff: fmtThreshold(r.units[u]?.router_cutoff),
             modelChanged: i > 0 && thisModel !== undefined && thisModel !== prevModel,
             thresholdChanged: i > 0 && thisThreshold !== "-" && thisThreshold !== prevThreshold,
             // Shared across both panels, since Claude is one model either way (not per business
             // unit like modelChanged/thresholdChanged are) -- a Tier 2 prompt change shows up
             // identically on the Payments and Retail bank charts at the same run.
             promptChanged: i > 0 && thisPromptVersion != null && thisPromptVersion !== prevPromptVersion,
+            // A retrained router, or a switch between the threshold rule and the learned router. Shared
+            // across both panels because one router decides for every business unit.
+            routerChanged: i > 0 && r.router != null && r.router !== runs[i - 1].router,
           };
         });
         return (
@@ -76,10 +82,10 @@ export default function ResolutionTrend({ runs, selectedId }) {
             </h3>
             <div className="chart" style={{ height: 256 }}>
               <ResponsiveContainer>
-                <ComposedChart data={data} margin={{ top: 48, right: 20, bottom: 4, left: 0 }}>
+                <ComposedChart data={data} margin={{ top: 62, right: 20, bottom: 4, left: 0 }}>
                   <CartesianGrid stroke={C.grid} vertical={false} />
                   <XAxis dataKey="id" padding={{ left: 16, right: 16 }} tickFormatter={runTick} tick={{ fontSize: 11, fill: C.muted }} stroke={C.grid} minTickGap={16} />
-                  <YAxis domain={[0, 100]} tickFormatter={(v) => `${v}%`} tick={{ fontSize: 12, fill: C.muted }} axisLine={false} tickLine={false} width={40} />
+                  <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v) => `${v}%`} tick={{ fontSize: 12, fill: C.muted }} axisLine={false} tickLine={false} width={40} />
                   {selectedId && <ReferenceLine x={selectedId} stroke={C.ink} strokeOpacity={0.1} strokeWidth={18} />}
                   {data.filter((d) => d.modelChanged).map((d) => (
                     <ReferenceLine key={`m-${d.id}`} x={d.id} stroke={C.tier2} strokeDasharray="5 4"
@@ -92,6 +98,10 @@ export default function ResolutionTrend({ runs, selectedId }) {
                   {data.filter((d) => d.promptChanged).map((d) => (
                     <ReferenceLine key={`p-${d.id}`} x={d.id} stroke={C.claudePrompt} strokeDasharray="6 2"
                       label={markerLabel("new Claude prompt", C.claudePrompt, PROMPT_LABEL_Y, data.indexOf(d), data.length)} />
+                  ))}
+                  {data.filter((d) => d.routerChanged).map((d) => (
+                    <ReferenceLine key={`r-${d.id}`} x={d.id} stroke={C.router} strokeDasharray="3 3"
+                      label={markerLabel("new router", C.router, ROUTER_LABEL_Y, data.indexOf(d), data.length)} />
                   ))}
                   <Tooltip
                     isAnimationActive={false}
@@ -106,7 +116,9 @@ export default function ResolutionTrend({ runs, selectedId }) {
                           <div>served from cache: {fmtPct(d.cache_pct, 0)}</div>
                           <div>sent to Claude: {fmtPct(d.claude_pct, 0)}</div>
                           <div className="chart-tooltip-sub">model: {d.model ?? "-"}</div>
-                          <div className="chart-tooltip-sub">threshold: {d.threshold}</div>
+                          <div className="chart-tooltip-sub">
+                            {d.router && d.router !== "threshold" ? `learned router: ${d.router}, cut-point ${d.cutoff}` : `threshold: ${d.threshold}`}
+                          </div>
                           <div className="chart-tooltip-sub">Claude prompt: {d.promptVersion ?? "-"}</div>
                           {d.cache_hit_rate != null && (
                             <div className="chart-tooltip-sub">cache hit rate (of escalations): {fmtPct(d.cache_hit_rate, 0)}, avg similarity {d.avg_cache_similarity?.toFixed(3) ?? "-"}</div>
@@ -115,7 +127,7 @@ export default function ResolutionTrend({ runs, selectedId }) {
                       );
                     }}
                   />
-                  <Legend formatter={(n) => (n === "local_pct" ? "answered locally" : n === "cache_pct" ? "served from cache" : n === "claude_pct" ? "sent to Claude" : "threshold")} />
+                  <Legend formatter={(n) => (n === "local_pct" ? "answered locally" : n === "cache_pct" ? "served from cache" : n === "claude_pct" ? "sent to Claude" : "confidence threshold (older router)")} />
                   <Area type="monotone" dataKey="local_pct" stackId="r" stroke={C.local} fill={C.local} fillOpacity={0.55} isAnimationActive={false} connectNulls />
                   <Area type="monotone" dataKey="cache_pct" stackId="r" stroke={C.cache} fill={C.cache} fillOpacity={0.55} isAnimationActive={false} connectNulls />
                   <Area type="monotone" dataKey="claude_pct" stackId="r" stroke={C.escalated} fill={C.escalated} fillOpacity={0.5} isAnimationActive={false} connectNulls />

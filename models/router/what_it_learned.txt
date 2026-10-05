@@ -1,0 +1,11 @@
+What the learned router weighs (text-probe-05Oct26-1102). Weights are quality marks added or removed; words are associations in the training data, not causes.
+
+Words and phrases in the QUESTION that push the predicted quality DOWN:
+  account (-0.61), in my (-0.47), while (-0.46), someone (-0.39), urgent need (-0.38), in (-0.36), card appreciate (-0.34), gbp (-0.34), student (-0.34), do need (-0.34), that (-0.33), student account (-0.33)
+Words and phrases in the QUESTION that push it UP:
+  atm (+0.33), my prepaid (+0.32), where (+0.31), password (+0.31), start (+0.30), me find (+0.29), see (+0.28), instalments (+0.28), for home (+0.28), do not (+0.27), where is (+0.27), week (+0.27)
+
+Words and phrases in the ANSWER that push the predicted quality DOWN:
+  card number (-0.81), last (-0.53), not (-0.51), declined (-0.48), if you (-0.46), this (-0.44), if (-0.43), keep your (-0.43), as customer (-0.42), email address (-0.40), username (-0.39), you need (-0.39)
+Words and phrases in the ANSWER that push it UP:
+  the transaction (+0.57), our (+0.56), specialist (+0.50), don hesitate (+0.48), call (+0.46), banking (+0.45), contact your (+0.45), location (+0.44), your online (+0.44), dates (+0.44), loan (+0.43), should (+0.43)

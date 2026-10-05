@@ -97,6 +97,11 @@ def normalize(df):
         out[f"quality_local_{dim}"] = num(df, f"quality_local_{dim}")
     out["is_exc"] = col(df, "is_exception").map(lambda v: str(v).strip().lower() == "true")
     out["threshold"] = num(df, "threshold_used")
+    # Which router decided. Rows logged before the learned router existed have no router column and
+    # were decided by the confidence threshold, so a blank means "threshold".
+    out["router"] = col(df, "router").fillna("threshold").astype(str)
+    out["router_pred"] = num(df, "router_predicted_quality")   # the learned router's predicted answer quality (1-5)
+    out["router_cutoff"] = num(df, "router_cutoff")            # escalate when the prediction is below this
     out["model"] = col(df, "tier1_model")
     out["query"] = col(df, "query").fillna("").astype(str)
     out["category"] = col(df, "category")
@@ -200,6 +205,9 @@ def metrics(g):
         # mixed group (e.g. a run where the threshold changed mid-way) show that honestly rather
         # than picking one arbitrarily.
         "threshold": sorted({round(float(t), 3) for t in g["threshold"].dropna()}),
+        # The learned router's cut-point(s) and how good it predicted the answers to be, if it decided this group.
+        "router_cutoff": sorted({round(float(t), 3) for t in g["router_cutoff"].dropna()}),
+        "avg_pred_quality": g["router_pred"].mean() if g["router_pred"].notna().any() else None,
     }
 
 
@@ -210,6 +218,17 @@ def models_of(g):
         names = sub["model"].dropna()
         out[unit] = names.mode().iloc[0] if not names.empty else None
     return out
+
+
+def router_of(g):
+    """The router that decided this run's questions: the name of the learned router's saved version
+    (it changes whenever the router is retrained), or "threshold" for the older confidence rule."""
+    names = g["router"].dropna()
+    return names.mode().iloc[0] if not names.empty else "threshold"
+
+
+def router_kind(name):
+    return "threshold" if name == "threshold" else "learned"
 
 
 def claude_prompt_version_of(g):
@@ -271,6 +290,8 @@ def runs():
             "rows": len(g),
             "models": models_of(g),
             "claude_prompt_version": claude_prompt_version_of(g),
+            "router": router_of(g),
+            "router_kind": router_kind(router_of(g)),
             "overall": metrics(g),
             "units": {unit: metrics(sub) for unit, sub in g.groupby("unit")},
             "quality_three_way": quality_three_way(g),
@@ -288,11 +309,14 @@ def run_detail(run_id: str = Query(...)):
     cache = g["decision"].eq("CACHE")
     esc = g["decision"].eq("ESCALATE")           # rows that really called Claude
 
-    # where each answer landed against the threshold
-    pts = g.dropna(subset=["conf"])
+    # where each answer landed: against the confidence threshold, or -- when the learned router
+    # decided the run -- against its cut-point, by the quality it predicted for the answer
+    router = router_of(g)
+    kind = router_kind(router)
+    pts = g.dropna(subset=["router_pred"] if kind == "learned" else ["conf"])
     if len(pts) > MAX_POINTS:
         pts = pts.sample(MAX_POINTS, random_state=0)
-    points = [{"c": r.conf, "u": r.unit, "x": bool(r.is_exc), "d": r.decision,
+    points = [{"c": r.conf, "p": r.router_pred, "u": r.unit, "x": bool(r.is_exc), "d": r.decision,
                "q": r.query[:110], "i": r.intent if isinstance(r.intent, str) else ""}
               for r in pts.itertuples()]
 
@@ -309,6 +333,9 @@ def run_detail(run_id: str = Query(...)):
         "models": models_of(g),
         "claude_prompt_version": claude_prompt_version_of(g),
         "thresholds": sorted({round(float(t), 3) for t in g["threshold"].dropna()}),
+        "router": router,
+        "router_kind": kind,
+        "cutoffs": sorted({round(float(t), 3) for t in g["router_cutoff"].dropna()}),
         "started": g["start"].min().isoformat() if g["start"].notna().any() else None,
         "ended": g["end"].max().isoformat() if g["end"].notna().any() else None,
         "kpis": metrics(g),
@@ -323,7 +350,7 @@ def run_detail(run_id: str = Query(...)):
         "points": points,
         "recent": [{"start": r.start.isoformat() if pd.notna(r.start) else None, "unit": r.unit,
                     "category": r.category, "intent": r.intent, "exception": bool(r.is_exc),
-                    "query": r.query, "conf": r.conf, "decision": r.decision, "total_ms": r.total_ms}
+                    "query": r.query, "conf": r.conf, "pred": r.router_pred, "decision": r.decision, "total_ms": r.total_ms}
                    for r in recent.itertuples()],
     })
 

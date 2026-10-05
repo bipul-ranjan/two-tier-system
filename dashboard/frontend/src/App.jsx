@@ -18,9 +18,11 @@ function Message({ title, children }) {
   );
 }
 
-function Readout({ k, thresholds }) {
+function Readout({ k, thresholds, router = "threshold", cutoffs = [] }) {
   const against =
-    thresholds.length === 1
+    router === "learned"
+      ? cutoffs.length ? `, and the learned router escalated any answer it predicted would score below ${cutoffs.map((t) => t.toFixed(2)).join(" or ")}` : ", decided by the learned router"
+      : thresholds.length === 1
       ? ` against a threshold of ${thresholds[0].toFixed(2)}`
       : thresholds.length > 1
       ? ` against thresholds of ${thresholds.map((t) => t.toFixed(2)).join(" and ")}`
@@ -112,7 +114,7 @@ export default function App() {
         ) : (
           <>
             <section className="section first">
-              <Readout k={d.kpis} thresholds={d.thresholds} />
+              <Readout k={d.kpis} thresholds={d.thresholds} router={d.router_kind} cutoffs={d.cutoffs} />
               <p className="runmeta">
                 Run {runLabel(d.run_id)}
                 {d.started ? `, started ${fmtWhen(d.started)}` : ""}.{" "}
@@ -123,10 +125,12 @@ export default function App() {
             <section className="section">
               <h2>Where each answer landed</h2>
               <p className="lede">
-                Each dot is one query, placed by the confidence of its local answer. Queries that fall left of the threshold line are escalated: served from the cache when a close past answer exists, otherwise sent to Claude.
+                {d.router_kind === "learned"
+                  ? "Each dot is one query, placed by the quality the router predicted for its local answer. Answers that fall left of the cut-point line are escalated: served from the cache when a close past answer exists, otherwise sent to Claude."
+                  : "Each dot is one query, placed by the confidence of its local answer. Queries that fall left of the threshold line are escalated: served from the cache when a close past answer exists, otherwise sent to Claude."}
               </p>
-              <ConfidenceStrip points={d.points} thresholds={d.thresholds} />
-              {d.thresholds.length === 0 && (
+              <ConfidenceStrip points={d.points} thresholds={d.thresholds} router={d.router_kind} cutoffs={d.cutoffs} />
+              {d.router_kind !== "learned" && d.thresholds.length === 0 && (
                 <p className="hint">This run did not record its threshold, so no line is drawn.</p>
               )}
             </section>
@@ -219,7 +223,7 @@ export default function App() {
               <summary>How these numbers are calculated</summary>
               <ul>
                 <li>Confidence is the geometric mean of the probabilities of the tokens in the local model's answer, taken from Ollama's log-probabilities. It shows how sure the model was of its own wording, not whether the answer is correct.</li>
-                <li>A query is answered locally when its confidence is at or above the threshold. Otherwise it is escalated: re-served from the cache if a close enough past Claude answer exists, and only sent to Claude if not.</li>
+                <li>The router decides after the local model has answered. The learned router reads the question, the local answer, its confidence and the business unit, predicts how good the answer is (1-5), and escalates it when the prediction is below its cut-point. The older rule escalates when confidence is below a threshold. Either way an escalated query is re-served from the cache if a close enough past Claude answer exists, and only sent to Claude if not.</li>
                 <li>Time is measured from the start of the query to the final answer, including the Claude call when there is one.</li>
                 <li>Claude spend is estimated from token counts and the prices set in tier2_escalate.py.</li>
                 <li>Answer quality (1-5) is a separate, offline measurement from confidence: Claude scores the actual answer text against correctness, completeness, tone, safety and clarity, after the run finishes -- automatically on every run, unless it was started with --noquality. Older rows, and rows from --noquality runs, only have a score once scripts/backfill_quality_scores.py has been run on them.</li>

@@ -16,7 +16,7 @@ Run from the project root, with ANTHROPIC_API_KEY set and Ollama running:
     python scripts/run_and_score.py 100
     python scripts/run_and_score.py 100 --nocache
 Any arguments after the row count are passed straight through to src.pipeline (--nocache,
---noquality, --score-quality-local <model>; see src/pipeline.py for the full list).
+--noquality, --threshold-router, --score-quality-local <model>; see src/pipeline.py for the full list).
 """
 import subprocess
 import sys

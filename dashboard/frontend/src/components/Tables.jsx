@@ -115,6 +115,7 @@ export function RunsTable({ runs }) {
 }
 
 export function RecentTable({ rows }) {
+  const showPred = rows.some((r) => r.pred != null);
   return (
     <div className="table-wrap">
       <table className="table recent">
@@ -124,6 +125,7 @@ export function RecentTable({ rows }) {
             <th>Query</th>
             <th>Scenario</th>
             <th className="num">Confidence</th>
+            {showPred && <th className="num" title="The quality (1-5) the router predicted for the local answer">Predicted quality</th>}
             <th>Outcome</th>
             <th className="num">Time taken</th>
           </tr>
@@ -139,6 +141,7 @@ export function RecentTable({ rows }) {
                 <span className="scenario-unit">{unitLabel(r.unit)}</span>
               </td>
               <td className="num">{fmtConf(r.conf)}</td>
+              {showPred && <td className="num">{r.pred != null ? r.pred.toFixed(2) : "-"}</td>}
               <td>
                 <span className={`pill ${r.decision === "LOCAL" ? "pill-local" : r.decision === "CACHE" ? "pill-cache" : "pill-esc"}`}>
                   {r.decision === "LOCAL" ? "answered locally" : r.decision === "CACHE" ? "served from cache" : "sent to Claude"}
