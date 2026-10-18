@@ -102,7 +102,8 @@ two-tier-system/
 |-- data/synthetic/            the ten synthetic question files the pipeline samples from (committed)
 |-- data/raw/                  downloaded datasets (not committed; fetched by scripts)
 |-- dashboard/                 the live dashboard: FastAPI backend and prebuilt React frontend
-|-- tests/                     16 automated tests
+|-- tests/                     45 automated tests
+|-- governance/                evidence for a governed pilot: model inventory, data flow, controls matrix, gap register
 |-- results/logs/              every run's records (not committed; created by the pipeline)
 |-- results/analysis/          saved outputs of the research scripts (committed)
 ```
@@ -237,7 +238,7 @@ If the two differ, either install the matching version (`pip install "scikit-lea
 ### Step 7. Check everything works
 
 ```powershell
-python -m pytest tests/ -q          # 16 passed. No Ollama or Claude key needed
+python -m pytest tests/ -q          # 45 passed. No Ollama or Claude key needed
 python -m src.config                # prints the models each unit will use
 ollama list                         # both models for Step 5 are listed
 python -m src.tier1                 # one real local answer, with its confidence
@@ -261,7 +262,7 @@ Run all commands from the project folder with the venv active, Ollama running, a
 ### The pipeline
 
 ```
-python -m src.pipeline [N] [--threshold-router] [--nocache] [--noquality] [--score-quality-local MODEL]
+python -m src.pipeline [N] [--threshold-router] [--nocache] [--noquality] [--no-redact] [--score-quality-local MODEL]
 ```
 
 | Part | Meaning | Default |
@@ -270,6 +271,7 @@ python -m src.pipeline [N] [--threshold-router] [--nocache] [--noquality] [--sco
 | `--threshold-router` | Route with the older confidence pass marks (0.71 payments, 0.60 retail bank) instead of the learned router. Use it to compare the two on the same questions | learned router |
 | `--nocache` | Do not use the semantic cache, so every escalation calls Claude | cache on |
 | `--noquality` | Skip the Claude quality marking after the run. Quality columns stay blank (fill them later, section 8) | marking on |
+| `--no-redact` | Turn the personal-data filter off, so raw question text goes to Claude, the examiner and the log. Only for reproducing older runs (section 8) | filter on |
 | `--score-quality-local MODEL` | Also mark answers with the local Ollama model `MODEL`: a cheap first pass written to separate `quality_local_*` columns, not the numbers to report | off |
 
 Unknown options are rejected with the list of valid ones. Examples:
@@ -314,7 +316,7 @@ python -m src.evaluate        # writes results/tables/summary_metrics.csv and bu
 | `python -m src.tier1` | One real local answer and its confidence (needs Ollama and the models) |
 | `python -m src.tier2_escalate` | One real Claude answer (needs the key; costs a fraction of a cent) |
 | `python -m src.quality` | A demonstration of the ground-truth scoring helpers (no API call) |
-| `python -m pytest tests/ -q` | The 16 automated tests |
+| `python -m pytest tests/ -q` | The 45 automated tests |
 
 ### Ollama commands you will use
 
@@ -362,6 +364,8 @@ quietly falls back to another rule. `--threshold-router` is the deliberate way t
 row's discarded Tier 1 draft, from 1 to 5 on correctness, completeness, tone, safety and clarity. Local rows copy their
 final marks to the draft columns, so no quality cell is left blank.
 
+**The personal-data filter** is on by default. Tier 1 runs on your own computer and sees the question as typed, but everything that leaves it or is stored (the question sent to Claude, the cache lookup, the question and answers sent to Claude as examiner, and the log) is first filtered by `src/privacy.py`, which replaces patterned identifiers with placeholders such as `[CARD_NUMBER]`. A question is filtered in full; an answer only for customer-identifier types and for values the customer typed. It catches emails, phone numbers, card numbers (Luhn-checked), IBANs, account numbers, sort codes, national IDs, a card's last four digits, dates of birth after a cue, UK postcodes, and names after a cue ("my name is", "Mr"). It does **not** catch free-text names or street addresses (0% on our generated test set), and it has not been tested on real customer text. Measure it with `scripts/evaluate_privacy_filter.py`. `--no-redact` turns it off, only to reproduce older runs.
+
 **The semantic cache** is on by default. For a question the router escalated, it looks for an earlier Claude answer to a
 near-identical question (similarity at least 0.95, no negation mismatch, same category and intent). The first use
 downloads a small embedding model (about 90 MB).
@@ -374,6 +378,9 @@ downloads a small embedding model (about 90 MB).
 | `scripts/backfill_prompt_version.py` | One-off: tags old escalated rows with which Claude prompt wording was in force | none (edit `CUTOFF_RUN_ID` to change the boundary) |
 | `scripts/backfill_run_id.py [RUN_ID]` | One-off: adds a `run_id` column to logs from before run ids existed | the id to use, default `run-default` |
 | `scripts/recover_missing_run.py` | Adds a finished run that did not reach the history file (it was open in Excel) | none |
+| `scripts/export_run_report.py` | Shows a run as one plain table with a summary and a list of problems, and saves CSV and Excel files. `--console FILE` also recovers rows that failed and were never saved | `--run`, `--list`, `--console`, `--out-dir`, `--no-files`, `--rows` |
+| `scripts/redact_history.py` | Removes personal identifiers from text already stored in the logs. Dry run by default; `--apply` backs up first | `--apply` |
+| `scripts/evaluate_privacy_filter.py` | Measures the filter's recall per identifier type on generated cases, and its false alarms | `--n`, `--seed`, `--sample`, `--min-recall`, `--out` |
 
 ## 9. Training your own models on Google Colab
 
@@ -382,7 +389,7 @@ Colab (keeping the code on Google Drive so a disconnect cannot wipe it), install
 the data (`scripts/fetch_bitext_banking.py`, and `scripts/generate_exception_training_data.py` for the retail unit),
 then run `training/train_payments.py` and, in a fresh runtime, `training/train_retail.py`. Models are saved to Google Drive
 as `.gguf` files with checkpoints every 250 steps, so a dropped session resumes. On a Colab L4, version 2 took about
-3 hours 44 minutes (payments) and 5.5 hours (retail bank). The complete walk-through, including the Ollama import, is in
+3 hours 44 minutes (payments) and an estimated 5.5 hours (retail bank). The complete walk-through, including the Ollama import, is in
 [training/README.md](training/README.md) and in sections 14 and 15 of the user manual.
 
 ## 10. Research scripts
@@ -401,11 +408,12 @@ took about an hour per fold; frozen mode takes about 7 minutes in all.
 ## 11. Tests
 
 ```powershell
-python -m pytest tests/ -q          # 16 tests, about two seconds
+python -m pytest tests/ -q          # 45 tests, about three seconds
 ```
 
 Twelve tests cover the learned router (predictions, the exact cut-point rule, saving and loading, and each
-failure message) and four cover the older threshold rule. None needs Ollama, a Claude key or any data.
+failure message), four cover the older threshold rule, and nineteen cover the personal-data filter and prove that Claude and
+the log receive only the filtered text. None needs Ollama, a Claude key or any data.
 See [tests/README.md](tests/README.md).
 
 ## 12. Documentation map
@@ -419,6 +427,7 @@ See [tests/README.md](tests/README.md).
 | [scripts/README.md](scripts/README.md) | Every script, its options and when to run it |
 | [training/README.md](training/README.md) | Fine-tuning on Colab and importing the models into Ollama |
 | [dashboard/README.md](dashboard/README.md) | The dashboard: what each view shows, how to run and change it |
+| [governance/README.md](governance/README.md) | The evidence base for a governed pilot: [model inventory](governance/MODEL_INVENTORY.md), [data flow](governance/DATA_FLOW.md), [controls matrix](governance/CONTROLS.md) and [gap register](governance/GAP_REGISTER.md). States plainly what is not built |
 | [data/README.md](data/README.md), [models/README.md](models/README.md), [results/README.md](results/README.md), [prompts/README.md](prompts/README.md), [tests/README.md](tests/README.md) | Each folder's contents |
 | Every `.py` file | A header comment that says what the file is for, how to run it, and what it needs and writes |
 
@@ -454,6 +463,9 @@ More, with step-by-step fixes, is in section 19 of the user manual.
   that assumption, and a hand-marked sample would be the way to test it.
 * **Not a production system.** There is no authentication, no audit trail beyond the logs, no real-time monitoring, and no
   attack testing (prompt injection and data leakage have not been tested). Do not point it at real customer data.
+* **The personal-data filter is a first control, not a guarantee.** It catches patterned identifiers only. Free-text names and
+  street addresses are not caught (0% on the generated test set), and it has not been tested on real text. The Claude examiner
+  still receives every (filtered) question and answer, including local ones, so exposure to the provider is 100% of rows in this harness.
 * **Speed.** On the author's machine a local answer takes about as long as a Claude call, so escalating adds time. The
   benefits shown are cost and keeping most answers on the computer, not speed.
 * **Small samples.** Several tests used 10 to 500 questions; read the intervals in the project documents, not just the averages.

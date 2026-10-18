@@ -51,7 +51,7 @@ Mac route only, and adds the things that are specific to a Mac.
 
 * **Route A: base models** (sections 6 to 8). Download two ready-made models. About 30 minutes. Fully working, but the answers and the router's
   behaviour differ from the fine-tuned models the project was measured with.
-* **Route B: fine-tuned models** (sections 9 to 11). Train on Colab, then import. About 3.7 and 5.5 hours of waiting on Colab (measured on its L4 GPU),
+* **Route B: fine-tuned models** (sections 9 to 11). Train on Colab, then import. About 3.7 and an estimated 5.5 hours of waiting on Colab (payments measured, retail estimated, on its L4 GPU),
   plus an hour of work. This is the full system.
 
 **The sensible order is to do Route A first** (so you know everything works on your Mac), then Route B.
@@ -239,7 +239,7 @@ The first is large (several GB, because the cache and the router's research tool
 python -m pytest tests/ -q
 ```
 
-**You should see `16 passed`.** These tests need no models and no key, so they confirm the Python side is healthy. Then check the scikit-learn version, which matters because the
+**You should see `45 passed`.** These tests need no models and no key, so they confirm the Python side is healthy. Then check the scikit-learn version, which matters because the
 router's saved model only loads under the version that trained it:
 
 ```
@@ -347,7 +347,7 @@ and a `Decision` of `LOCAL`, `CACHE` or `ESCALATE`), then a stage of **quality s
 ### 7.3 The options
 
 ```
-python -m src.pipeline [N] [--threshold-router] [--nocache] [--noquality] [--score-quality-local MODEL]
+python -m src.pipeline [N] [--threshold-router] [--nocache] [--noquality] [--no-redact] [--score-quality-local MODEL]
 ```
 
 | Option | Effect |
@@ -356,6 +356,7 @@ python -m src.pipeline [N] [--threshold-router] [--nocache] [--noquality] [--sco
 | `--threshold-router` | Use the older rule (escalate when confidence is below a pass mark) instead of the learned router |
 | `--nocache` | Do not re-use old Claude answers |
 | `--noquality` | Skip the Claude quality marking (cheaper). Fill it in later with `python scripts/backfill_quality_scores.py` |
+| `--no-redact` | Turn the personal-data filter off. It is on by default and replaces card numbers, emails, phones and similar identifiers before text goes to Claude or the log. Use only to reproduce older runs |
 | `--score-quality-local MODEL` | Also mark with a local Ollama model into separate columns (a cheap extra opinion) |
 
 **Keep the Mac awake during long runs** (below 100 questions it rarely matters): run `caffeinate -dimsu python -m src.pipeline 300` and the Mac will not sleep until it finishes.
@@ -584,7 +585,7 @@ already fit. But your models are your own training run, so for the best match, b
 ## 12. Check the finished system
 
 ```
-python -m pytest tests/ -q                       # 16 passed
+python -m pytest tests/ -q                       # 45 passed
 python -m src.pipeline 100                       # the full system: learned router, cache, Claude, marking
 python -m uvicorn dashboard.backend.main:app --port 8000
 ```
@@ -682,7 +683,7 @@ Tick each when done. The "Check" is what proves it.
 - [ ] `git clone ...` done; `ls` in `~/Projects/two-tier-system` shows `src`, `scripts`, `data`
 - [ ] `python3.12 -m venv venv`; `source venv/bin/activate` shows `(venv)`
 - [ ] `pip install -r requirements.txt` and `-r dashboard/backend/requirements.txt` finished
-- [ ] `python -m pytest tests/ -q` shows **16 passed**
+- [ ] `python -m pytest tests/ -q` shows **45 passed**
 - [ ] scikit-learn version matches the router (or you will retrain)
 - [ ] Claude key saved with `read -s`; `echo ${ANTHROPIC_API_KEY:0:7}` prints `sk-ant-`
 - [ ] `ollama pull phi3:mini` and `ollama pull qwen2.5:1.5b`; `sed` edit applied; `python -m src.config` shows them
@@ -709,4 +710,4 @@ Tick each when done. The "Check" is what proves it.
 - [ ] `python -m src.pipeline 500 --threshold-router` finished (history built with the new models)
 - [ ] `python scripts/train_text_router.py` saved a router
 - [ ] `python -m src.pipeline 100` runs with the learned router; the dashboard shows it
-- [ ] `python -m pytest tests/ -q` shows 16 passed
+- [ ] `python -m pytest tests/ -q` shows 45 passed

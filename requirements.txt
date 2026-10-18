@@ -21,3 +21,6 @@ datasets
 
 # --- tests ---
 pytest
+
+# --- optional: the Excel file from scripts/export_run_report.py (the CSV needs nothing extra) ---
+# openpyxl

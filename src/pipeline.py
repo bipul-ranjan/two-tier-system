@@ -50,6 +50,7 @@ Options, all optional and in any order after the number of questions:
     --threshold-router         route with the older confidence pass marks (THRESHOLDS below) instead of the
                                learned router. Use it to compare the two routers on the same questions
     --nocache                  skip the semantic cache, so every escalation calls Claude
+    --no-redact                turn the personal-data filter off (it is on by default); only for reproducing older runs
     --noquality                skip the Claude quality marking after the run (quality columns stay blank;
                                fill them later with scripts/backfill_quality_scores.py)
     --score-quality-local M    also mark answers with the local Ollama model M, a cheap first pass written to
@@ -87,6 +88,7 @@ from .learned_router import TextProbeRouter, RouterNotTrainedError
 from .tier2_escalate import ask_tier2, estimate_cost, client as anthropic_client
 from .quality import judge_answer_quality, judge_answer_quality_local, QUALITY_DIMS
 from .semantic_cache import SemanticCacheIndex, try_semantic_cache
+from .privacy import redact, merge_findings, RedactionResult, FILTER_VERSION, ANSWER_TYPES
 
 # Whole-file exclusive locking so results_history.csv cannot be opened elsewhere
 # (Excel, a text editor) for the whole duration of a run -- not just checked once
@@ -101,6 +103,7 @@ LOGS_DIR = "results/logs"
 
 N_SAMPLES = 100
 SEED = None  # None = different random rows every run; set an int to reproduce a run
+REDACT_PII = True  # the personal-data filter (src/privacy.py); main() sets it False for --no-redact
 
 # Escalate anything scoring below its threshold. Threshold is set per business unit,
 # and can be set separately for normal vs. exception rows within a unit -- edit the
@@ -347,6 +350,16 @@ def unload_models(models: list) -> None:
             print(f"Warning: could not unload {m}: {e}")
 
 
+def _outbound(text, answer: bool = False, known=None) -> RedactionResult:
+    """The copy of a piece of text that may leave the organisation or be stored in the log: redacted when
+    the personal-data filter is on (the default), unchanged under --no-redact. A question is filtered in full.
+    An answer (answer=True) is filtered for customer-identifier types only, plus any value from the question
+    (known) that it repeats back, because phone numbers and addresses in answers are normally public contacts."""
+    if not REDACT_PII:
+        return RedactionResult(text=text if isinstance(text, str) else "")
+    return redact(text, only=ANSWER_TYPES, known=known) if answer else redact(text)
+
+
 def process_query(query: str, business_unit: str, category: str, intent: str, is_exception: bool, run_id: str,
                    cache_index: SemanticCacheIndex = None, router: TextProbeRouter = None) -> dict:
     """Run one question through the whole cascade and return its log row. Tier 1 answers and reports
@@ -363,10 +376,18 @@ def process_query(query: str, business_unit: str, category: str, intent: str, is
     t1_result = ask_tier1(query, business_unit=business_unit, keep_alive=KEEP_ALIVE)
     tier1_latency_ms = (time.perf_counter() - t_query_start) * 1000
 
+    # Privacy boundary. Tier 1 runs on the organisation's own servers, so it saw the original question. Anything
+    # that leaves that boundary (Claude, the cache lookup, the examiner) or is stored (the log) uses the
+    # redacted copy, and so does the router, so it reads the same text it was trained on.
+    q_red = _outbound(query)
+    a_red = _outbound(t1_result["answer"], answer=True, known=q_red.originals)
+    safe_query, safe_t1_answer = q_red.text, a_red.text
+    pii_findings = merge_findings(q_red, a_red)
+
     if router is not None:
         # The learned router reads the question, Tier 1's answer, its confidence and the unit,
         # predicts the answer's quality, and escalates below its cut-point.
-        predicted_quality = router.predict_one(query, t1_result["answer"], t1_result["confidence_score_avg"], business_unit)
+        predicted_quality = router.predict_one(safe_query, safe_t1_answer, t1_result["confidence_score_avg"], business_unit)
         decision = router.decide(predicted_quality)
         router_name, router_cutoff, threshold_logged = router.version, router.cutoff, None
     else:
@@ -376,8 +397,10 @@ def process_query(query: str, business_unit: str, category: str, intent: str, is
     print(f"Start Time     : {start_dt.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Business Unit  : {t1_result['business_unit']} ({t1_result['assistant_name']})")
     print(f"Scenario       : {category} / {intent}{'  [EXCEPTION]' if is_exception else ''}")
-    print(f"Query          : {query}")
-    print(f"Tier 1 Answer  : {t1_result['answer'][:100]}{'...' if len(t1_result['answer']) > 100 else ''}")
+    print(f"Query          : {safe_query}")
+    print(f"Tier 1 Answer  : {safe_t1_answer[:100]}{'...' if len(safe_t1_answer) > 100 else ''}")
+    if pii_findings:
+        print(f"Personal data  : {sum(pii_findings.values())} replaced ({', '.join(sorted(pii_findings))}) before anything leaves or is logged")
     print(f"Confidence AVG : {t1_result['confidence_score_avg']:.4f}")
     print(f"Confidence MIN : {t1_result['confidence_score_min']:.4f}")
     if router is not None:
@@ -396,8 +419,8 @@ def process_query(query: str, business_unit: str, category: str, intent: str, is
         "category": category,
         "intent": intent,
         "is_exception": is_exception,
-        "query": query,
-        "tier1_answer": t1_result["answer"],
+        "query": safe_query,
+        "tier1_answer": safe_t1_answer,
         "tier1_confidence_avg": t1_result["confidence_score_avg"],
         "tier1_confidence_min": t1_result["confidence_score_min"],
         "threshold_used": threshold_logged,
@@ -415,12 +438,15 @@ def process_query(query: str, business_unit: str, category: str, intent: str, is
         "tier2_confidence": None,
         "tier2_prompt_version": None,
         "estimated_cost_usd": 0.0,
-        "final_answer": t1_result["answer"],
+        "final_answer": safe_t1_answer,
         "cache_hit": False,
         "cache_similarity": None,
         "cache_path": None,  # "direct" when cache_hit is True (always "direct" now -- the gray-zone
                              # verification path was removed; see src/semantic_cache.py)
         "cache_matched_query": None,
+        "pii_filter": FILTER_VERSION if REDACT_PII else "off",
+        "pii_count": None,
+        "pii_types": None,
     }
 
     tier2_latency_ms = None
@@ -428,7 +454,7 @@ def process_query(query: str, business_unit: str, category: str, intent: str, is
         cache_result = None
         if cache_index is not None:
             try:
-                cache_result = try_semantic_cache(cache_index, query, category=category, intent=intent)
+                cache_result = try_semantic_cache(cache_index, safe_query, category=category, intent=intent)
             except Exception as e:
                 # The cache is an optimisation, not the pipeline's job: if a lookup fails for
                 # any reason, treat it as a miss and escalate normally rather than losing the row.
@@ -445,10 +471,12 @@ def process_query(query: str, business_unit: str, category: str, intent: str, is
             row["cache_similarity"] = round(cache_result["similarity"], 4)
             row["cache_path"] = cache_result["path"]
             row["cache_matched_query"] = cache_result["matched_query"]
-            row["final_answer"] = cache_result["answer"]
+            cached_red = _outbound(cache_result["answer"], answer=True, known=q_red.originals)
+            row["final_answer"] = cached_red.text
+            pii_findings = merge_findings(RedactionResult("", pii_findings), cached_red)
         else:
             t2_start = time.perf_counter()
-            t2_result = ask_tier2(query, business_unit=business_unit)
+            t2_result = ask_tier2(safe_query, business_unit=business_unit)
             tier2_latency_ms = (time.perf_counter() - t2_start) * 1000
             row["tier2_latency_ms"] = round(tier2_latency_ms, 1)
             row["tier2_input_tokens"] = t2_result["input_tokens"]
@@ -456,10 +484,14 @@ def process_query(query: str, business_unit: str, category: str, intent: str, is
             row["tier2_confidence"] = t2_result["confidence"]
             row["tier2_prompt_version"] = t2_result["prompt_version"]
             row["estimated_cost_usd"] = estimate_cost(t2_result["input_tokens"], t2_result["output_tokens"])
-            row["final_answer"] = t2_result["answer"]
+            t2_red = _outbound(t2_result["answer"], answer=True, known=q_red.originals)
+            row["final_answer"] = t2_red.text
+            pii_findings = merge_findings(RedactionResult("", pii_findings), t2_red)
 
     total_latency_ms = (time.perf_counter() - t_query_start) * 1000
     row["total_latency_ms"] = round(total_latency_ms, 1)
+    row["pii_count"] = sum(pii_findings.values())
+    row["pii_types"] = ",".join(sorted(pii_findings))
     row["response_end_time"] = datetime.now().isoformat(timespec="milliseconds")
 
     tier2_text = f"{tier2_latency_ms:.0f} ms" if tier2_latency_ms is not None else "-"
@@ -699,11 +731,11 @@ def parse_cli_args(args: list) -> tuple:
         python -m src.pipeline 100 --threshold-router   # route with the old confidence pass mark instead
         python -m src.pipeline 100 --score-quality-local llama3.2:3b   # extra, opt-in local judge
     """
-    flags = {"--nocache", "--noquality", "--threshold-router", "--score-quality-local"}
+    flags = {"--nocache", "--noquality", "--threshold-router", "--score-quality-local", "--no-redact"}
     unknown = [a for a in args if a.startswith("--") and a not in flags]
     if unknown:
         raise SystemExit(f"Unknown option(s): {' '.join(unknown)}. "
-                         f"Valid options: --nocache, --noquality, --threshold-router, --score-quality-local <model>")
+                         f"Valid options: --nocache, --noquality, --threshold-router, --no-redact, --score-quality-local <model>")
     local_judge_model = None
     if "--score-quality-local" in args:
         idx = args.index("--score-quality-local")
@@ -719,7 +751,16 @@ def main(argv=None) -> None:
     """Command-line entry point: parse the options, say which router, cache and quality scoring are on,
     and run the pipeline on a random sample of the synthetic questions.
     """
-    n, score_quality, local_judge_model, use_semantic_cache, use_learned_router = parse_cli_args(sys.argv[1:] if argv is None else argv)
+    raw_args = sys.argv[1:] if argv is None else argv
+    n, score_quality, local_judge_model, use_semantic_cache, use_learned_router = parse_cli_args(raw_args)
+    global REDACT_PII
+    REDACT_PII = "--no-redact" not in raw_args
+    if REDACT_PII:
+        print(f"Personal-data filter: ON (default, {FILTER_VERSION}). Identifiers are replaced with placeholders before text goes to "
+              f"Claude, the cache lookup, the examiner or the log. It catches patterned identifiers only, not free-text names or "
+              f"addresses (see src/privacy.py). Pass --no-redact only to reproduce older runs.")
+    else:
+        print("Personal-data filter: OFF (--no-redact). Raw question text goes to Claude, the examiner and the log.")
     if use_learned_router:
         print("Router: LEARNED (default). After Tier 1 answers, a trained model predicts how good the answer is and "
               "escalates it if the prediction is below its cut-point. Pass --threshold-router for the old confidence rule.")

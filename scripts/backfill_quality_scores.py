@@ -39,6 +39,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.quality import judge_answer_quality, judge_answer_quality_local, QUALITY_DIMS
+from src.privacy import redact, ANSWER_TYPES
 from src.pipeline import HistoryLock, guard_writable, LOGS_DIR, HISTORY_PATH
 from src.tier2_escalate import client as anthropic_client
 
@@ -131,6 +132,9 @@ def main():
     ap.add_argument("--limit", type=int, default=None, help="cap the number of rows scored this pass")
     ap.add_argument("--judge-local", default=None, metavar="MODEL",
                      help="score with this local Ollama model instead of Claude, writing quality_local_* columns")
+    ap.add_argument("--no-redact", action="store_true",
+                    help="send the question and answer to Claude exactly as logged (by default personal identifiers are replaced first, "
+                         "because older log rows may still hold them)")
     ap.add_argument("--draft", action="store_true",
                      help="score the local model's discarded draft (tier1_answer) instead of final_answer -- "
                           "writes quality_draft_* columns: escalated rows get a judge call, local rows copy their "
@@ -145,7 +149,8 @@ def main():
         if not os.environ.get("ANTHROPIC_API_KEY"):
             raise RuntimeError("ANTHROPIC_API_KEY is not set")
         judge_label = "claude"
-        judge_one = lambda q, a: judge_answer_quality(anthropic_client, q, a)
+        _clean = (lambda q, a: (q, a)) if args.no_redact else (lambda q, a: (redact(q).text, redact(a, only=ANSWER_TYPES, known=redact(q).originals).text))
+        judge_one = lambda q, a: judge_answer_quality(anthropic_client, *_clean(q, a))
         prefix = "quality_draft_" if args.draft else "quality_"
 
     if not os.path.exists(HISTORY_PATH):

@@ -26,8 +26,8 @@ Tier 1's prompt names the assistant the same way. When training ends, the model 
 
 | Run | GPU | Time | Notes |
 |---|---|---|---|
-| Version 2, payments (10,902 examples, 5 epochs, 6,815 steps) | Colab L4 | about 3 hours 44 minutes | measured |
-| Version 2, retail bank (18,843 examples, 5 epochs, 11,780 steps) | Colab L4 | about 5.5 hours | measured; resumed from a checkpoint after one disconnect |
+| Version 2, payments (10,902 examples, 5 epochs, 6,815 steps) | Colab L4 | 3 hours 44 minutes 28 seconds | measured from the run's own log |
+| Version 2, retail bank (18,843 examples, 5 epochs, 11,780 steps) | Colab L4 | an estimated 5.5 hours | estimated from the pace (about 1.68 seconds a step); the run was split across two sessions after a disconnect at the step-7,000 checkpoint |
 | Version 1 (rank 16, 3 epochs), either model | Colab L4 | about 2.5 hours | estimated from the run's pace |
 | Version 1, payments | Colab T4 (free tier) | projected 5.5 to 6 hours | a first attempt was stopped at 36% after two hours, so the L4 is recommended |
 
@@ -154,8 +154,12 @@ particular model's answers.
 1.5e-4) for **both** models, in the same change that added the retail exception data. So **payments' result isolates the effect of the
 settings alone** (its data did not change), while **retail's result reflects the settings and the new data together**. State that plainly
 in any write-up: retail's confidence shift after this retrain cannot be credited to one cause from this run alone, and separating them
-would need a run that changes only one. In the project's runs, retail's average confidence stayed at about 0.53 after retraining, so
-confidence did not improve even though the answers changed.
+would need a run that changes only one. What the logs show (6,310 answers, version 1 against version 2, with 95% intervals): confidence
+rose in both units, from 0.701 to 0.736 for payments and from 0.533 to 0.659 for retail bank (0.485 to 0.729 on retail exception
+questions). Quality, as marked by Claude, rose far less: payments 3.62 to 3.65 (a change too small to tell from luck), retail bank 3.37
+to 3.46 (+0.08, interval +0.03 to +0.14), and retail exceptions 2.94 to 3.08. In retail bank, confidence's link with quality fell from +0.37
+to -0.04. So training made the helpers much surer but only a little better. (An earlier version of this note said retail confidence
+"stayed at about 0.53"; that was the version 1 level, and the logs show it rose.)
 
 ## What goes into Git and what does not
 

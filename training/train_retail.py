@@ -28,8 +28,8 @@ Mount Drive before running this script:
     python training/train_retail.py
 
 Settings for version 2 are the same as for the payments script (train_config.py). Training on 18,843 examples (14,643
-real plus 4,200 synthetic exception examples) took about 5.5 hours on a Colab L4 (11,780 steps; 2.34% of the parameters
-trained), and was resumed from a checkpoint after the session disconnected once.
+real plus 4,200 synthetic exception examples) was estimated at 5.5 hours on a Colab L4 (11,780 steps at about 1.68 seconds each; 2.34% of the parameters
+trained). It was split across two sessions: the first disconnected after the step-7,000 checkpoint and training resumed from it.
 
 Outputs, on Google Drive: retail_bank_assistant.gguf (4-bit q4_k_m) in LJMU_Research/two-tier-system-models, and
 checkpoints every 250 steps in retail_checkpoints/. If the session drops, run the same command again and it resumes.

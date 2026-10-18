@@ -19,9 +19,12 @@ ones with options print them with `--help`.
 | Get the practice questions the pipeline uses | They are already in `data/synthetic/`. To regenerate: `generate_synthetic_bitext.py` |
 | Get training data for the two models | `fetch_bitext_banking.py`, then `generate_exception_training_data.py` for the retail unit |
 | Run the pipeline and be sure every quality mark is filled in | `run_and_score.py` |
+| See a run as one plain table (and spot rows that failed) | `export_run_report.py` |
 | Fill in quality marks that are blank | `backfill_quality_scores.py`, then again with `--draft` |
 | Train, or retrain, the learned router | `train_text_router.py` |
 | Recover a run that did not reach the history file | `recover_missing_run.py` |
+| Remove personal identifiers from logs already written | `redact_history.py` (dry run first) |
+| Measure what the personal-data filter catches and misses | `evaluate_privacy_filter.py` |
 | Reproduce the router research | `probe_reward_model.py`, then `train_router.py` |
 
 ---
@@ -110,6 +113,36 @@ top of an unfinished run. `N` is required.
 
 ---
 
+### export_run_report.py: a run as one plain table
+
+The pipeline prints a long block of text per question, which is hard to read or share. This script lays one run out as one row per
+question, prints a summary, lists any problems with the command that fixes each, and saves a CSV and an Excel file to
+`results/reports/` (not tracked by Git, because they hold question text).
+
+It reads one of two sources:
+
+* **The saved log** (default): the complete record of every row that was saved, with the full question and answers, the router's
+  prediction, the decision, the timings and the quality marks.
+* **Pasted console output** (`--console FILE`): only a printout, but the one place a row that **failed** still appears. A row that
+  fails, for example when the Claude connection drops, is skipped and never saved, so the log leaves it out and the saved run
+  understates how many questions went to Claude. Parsing the printout brings those rows back and counts them.
+
+To capture console output while running: `python -m src.pipeline 100 | Tee-Object -FilePath run_console.txt` (Windows PowerShell)
+or `python -m src.pipeline 100 | tee run_console.txt` (Mac and Linux). Or copy the text into a file.
+
+| Option | Meaning | Default |
+|---|---|---|
+| `--run RUN_ID` | A run in the history | the newest |
+| `--list` | List the 15 most recent runs and exit | off |
+| `--console FILE` | Read pasted console output instead of the saved log | off |
+| `--history PATH` | A different history file | `results/logs/results_history.csv` |
+| `--out-dir DIR` | Where to write the CSV and Excel files | `results/reports` |
+| `--no-files` | Print only; write nothing | off |
+| `--rows N` | Print only the first N rows (the files always hold all rows) | all |
+
+The Excel file needs `pip install openpyxl`; without it you still get the CSV. Older logs that recorded a cache hit as `ESCALATE` are
+shown as `CACHE`, as on the dashboard.
+
 ## 3. The learned router
 
 ### train_text_router.py: train the router the pipeline uses
@@ -153,11 +186,44 @@ python scripts/backfill_quality_scores.py [--unit NAME] [--run RUN_ID] [--limit 
 | `--run RUN_ID` | Only rows of this run |
 | `--limit N` | Mark at most N rows this pass (start small to check cost, then expand) |
 | `--judge-local MODEL` | Mark with this local Ollama model instead of Claude. Writes the separate `quality_local_*` columns, never the `quality_*` ones |
+| `--no-redact` | Send the question and answer to Claude exactly as logged. By default personal identifiers are replaced first, because older rows may still hold them |
 | `--draft` | Mark Tier 1's own answer (`tier1_answer`) instead of the final answer. Writes `quality_draft_*`. Escalated rows get a Claude call; local rows copy their final marks for free |
 
 Run it **without** `--draft` first (so local rows have final marks to copy), then **with** it. Only rows missing a mark are
 judged, so repeat runs cost nothing. Cost: about $0.0012 per mark with Claude (about $1.20 per 1,000). Needs `ANTHROPIC_API_KEY`
 unless `--judge-local` is used.
+
+### redact_history.py: remove personal identifiers from logs already written
+
+Rows logged before the personal-data filter existed hold the question and answers exactly as typed. This script applies the same
+filter to the stored text (`query`, `tier1_answer`, `final_answer`, `cache_matched_query` and the quality notes) and fills the audit
+columns `pii_filter`, `pii_count` and `pii_types`. Questions are filtered in full; answers only for customer-identifier types and for
+values that appeared in the same row's question, so public helplines and addresses in answers survive.
+
+| Option | Meaning |
+|---|---|
+| (none) | Dry run: reports how many identifiers it found and how many questions would change. Writes nothing |
+| `--apply` | Writes the changes to `results_history.csv` and the latest-run files, after copying the originals to `results/logs/backup-redact-<time>/` |
+
+Do not run it while a pipeline run is in progress. Redaction changes the text the router learns from, so retrain the router afterwards
+(`python scripts/train_text_router.py`).
+
+### evaluate_privacy_filter.py: measure what the filter catches and misses
+
+Builds labelled test sentences (made-up identifiers in realistic formats), counts how often each identifier is removed, and checks
+for false alarms on your real synthetic questions and on tricky look-alikes (amounts, dates, rates, reference numbers). Free-text names
+and street addresses are included on purpose, as types the filter is not designed to catch, so the gap is measured.
+
+| Option | Meaning | Default |
+|---|---|---|
+| `--n N` | Test cases per identifier type | 200 |
+| `--seed N` | Random seed, so the result repeats | 7 |
+| `--sample N` | Real synthetic questions to check for false alarms | 3000 |
+| `--min-recall X` | Exit with code 1 if any covered type is below X (for a pass/fail check) | none |
+| `--out PATH` | Write every test case and its result to a CSV | none |
+
+Recall on generated cases is a ceiling, not proof: the generator writes identifiers in the formats the filter knows. Test on real,
+labelled samples with the privacy team before relying on it.
 
 ### backfill_cache_decision.py: relabel old cache hits
 

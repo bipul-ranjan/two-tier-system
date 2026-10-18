@@ -251,7 +251,7 @@ This creates a private box for the project's software, so it does not interfere 
 python -m pytest tests/ -q
 ```
 
-**You should see** `16 passed`. If you see `No module named pytest`, the environment is not active (step 3).
+**You should see** `45 passed`. If you see `No module named pytest`, the environment is not active (step 3).
 
 ---
 
@@ -392,7 +392,7 @@ and one file per business unit.
 ### The options
 
 ```
-python -m src.pipeline [N] [--threshold-router] [--nocache] [--noquality] [--score-quality-local MODEL]
+python -m src.pipeline [N] [--threshold-router] [--nocache] [--noquality] [--no-redact] [--score-quality-local MODEL]
 ```
 
 | Option | What it does | When to use it |
@@ -401,6 +401,7 @@ python -m src.pipeline [N] [--threshold-router] [--nocache] [--noquality] [--sco
 | `--threshold-router` | Use the older rule (escalate when confidence is below 0.71 for payments or 0.60 for retail bank) instead of the learned router | To compare the two routers, or if you have not got a trained router yet |
 | `--nocache` | Do not look for a re-usable old Claude answer | To measure what the cache saves |
 | `--noquality` | Skip the quality marking after the run | To save money while testing. Fill the marks in later (section 13) |
+| `--no-redact` | Turn the personal-data filter off, so raw question text is sent to Claude and written to the log | Only to reproduce an older run. Leave it on otherwise |
 | `--score-quality-local MODEL` | Also mark with a local Ollama model, into separate columns | A cheap extra opinion; not the numbers to report |
 
 Examples:
@@ -416,6 +417,7 @@ If you mistype an option, the program stops and lists the valid ones.
 
 ### Things to know about a run
 
+* **A personal-data filter runs by default.** Your own computer (Tier 1) sees each question as typed, but before anything goes to Claude, the cache or the log, patterned identifiers such as card numbers, emails, phone numbers and account numbers are replaced with placeholders like `[CARD_NUMBER]`. It does **not** catch names or street addresses written in ordinary sentences, and it has not been tested on real customer text, so do not use real customer data. Measure it with `python scripts/evaluate_privacy_filter.py`, and clean older logs with `python scripts/redact_history.py` (a dry run unless you add `--apply`).
 * **Do not open `results_history.csv` in Excel during a run.** The program locks it from the start; an open copy blocks the final save. If that happens, close it and run `python scripts/recover_missing_run.py`.
 * **The questions are random** each time. To draw the same questions every run (needed for fair comparisons), open `src/pipeline.py`, find `SEED = None` near the top, and change it to a number such as `SEED = 42`.
 * **If the program stops at the start with a message about the router,** the trained router is missing or from another scikit-learn version. Section 11 explains the fix; to run once without it, add `--threshold-router`.
@@ -443,7 +445,21 @@ Open them in Excel or any spreadsheet program (but not during a run). The **deci
 
 The most useful columns are `query`, `tier1_answer` (the small model's answer, kept even when discarded), `final_answer` (what the customer got), `decision`, `tier1_confidence_avg`,
 `router_predicted_quality` and `router_cutoff`, `estimated_cost_usd`, and the quality marks `quality_overall` (the final answer) and `quality_draft_overall` (the small
-model's own answer). **`results/logs/README.md` explains all 47 columns.**
+model's own answer). **`results/logs/README.md` explains all 50 columns.**
+
+### A run as one plain table
+
+The text the pipeline prints is hard to read or share. To see a run as one row per question, with a summary and a list of problems:
+
+```
+python scripts/export_run_report.py                      # the newest run
+python scripts/export_run_report.py --list               # which runs exist
+python scripts/export_run_report.py --run "run-18-Oct-26-09:05 AM"
+```
+
+It writes a CSV and, if you have run `pip install openpyxl`, a colour-coded Excel file to `results/reports/`. If a run showed
+`row failed and will be skipped` warnings, those rows were **not saved** (the log silently leaves them out), so save the console text
+into a file and run `python scripts/export_run_report.py --console run_console.txt` to bring them back and see the true numbers.
 
 ### Quick summary tables
 
@@ -594,6 +610,8 @@ All are run from the project folder with `(venv)` showing. All are safe to run a
 | `... --judge-local MODEL` | Mark with a local Ollama model instead of Claude, into separate `quality_local_*` columns (a cheap first look, not the numbers to report) |
 | `python scripts/run_and_score.py 100` | The pipeline, then both quality fills as a safety net. Any option after the number goes to the pipeline |
 | `python scripts/recover_missing_run.py` | Adds a finished run that did not reach the history file because the file was open in Excel |
+| `python scripts/redact_history.py` | Removes personal identifiers from logs already written. Reports first; `--apply` writes, after making a backup |
+| `python scripts/evaluate_privacy_filter.py` | Measures what the personal-data filter catches and misses on generated test cases |
 | `python scripts/backfill_cache_decision.py` | One-off: relabels old cache hits as `CACHE` in older logs |
 | `python scripts/backfill_prompt_version.py` | One-off: labels older escalated rows with which Claude prompt wording was used |
 | `python scripts/backfill_run_id.py` | One-off: gives logs from before run ids existed a run id. The pipeline tells you if you need it |
@@ -605,7 +623,7 @@ All are run from the project folder with `(venv)` showing. All are safe to run a
 This is the most advanced part. It teaches the two small models to be better at banking questions, and it is how the project's version 2 models were made. It is optional: the system works without it (Path A in section 7).
 It needs a powerful graphics card, so instead of your computer you borrow one from Google, using **Google Colab**.
 
-**What to expect.** On a Colab **L4** graphics card, version 2 took about **3 hours 44 minutes** for the payments model and about **5.5 hours** for the retail-bank model. On the free T4 card it is about twice as slow. Colab's
+**What to expect.** On a Colab **L4** graphics card, version 2 took about **3 hours 44 minutes** for the payments model and an estimated **5.5 hours** for the retail-bank model. On the free T4 card it is about twice as slow. Colab's
 paid tiers charge by the hour; read the current rate from Colab's own screen. Keep the Colab browser tab open and your computer awake while training. If a session drops, you can continue (see below).
 
 **Everything below is typed into Colab, not your own terminal.** Run each block as a separate "cell" (click **+ Code**, paste, press the Play button or `Shift + Enter`).
@@ -764,7 +782,7 @@ cd Desktop\two-tier-system            (Mac: cd Desktop/two-tier-system)
 python -m pytest tests/ -q
 ```
 
-**You should see** `16 passed` in about two seconds. They need no Ollama, no Claude key and no data. Twelve test the learned router (its predictions, its exact cut-point rule, saving and loading, and each
+**You should see** `45 passed` in about two seconds. They need no Ollama, no Claude key and no data. Twelve test the learned router (its predictions, its exact cut-point rule, saving and loading, and each
 error message) and four test the older confidence rule. Run them after changing the router, after upgrading scikit-learn, and before sharing a copy. `tests/README.md` lists each test and what is not covered.
 
 ---
@@ -817,7 +835,7 @@ If you meet an error not listed here, copy the exact error message somewhere saf
 | `data/synthetic/` | The ten files of practice questions (included) |
 | `data/raw/` | Downloaded datasets (created by scripts; not included) (`data/README.md`) |
 | `dashboard/` | The dashboard (`dashboard/README.md`) |
-| `tests/` | The 16 automated tests (`tests/README.md`) |
+| `tests/` | The 45 automated tests (`tests/README.md`) |
 | `results/logs/` | Every run's records, created by the pipeline (`results/logs/README.md`) |
 | `results/tables/`, `results/plots/`, `results/analysis/` | Summary tables, charts, and the saved research outputs |
 | `User-Manual/` | This manual |

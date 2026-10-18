@@ -18,7 +18,7 @@ Every row has exactly one `decision`: **`LOCAL`** (Tier 1's answer was sent), **
 re-served) or **`ESCALATE`** (the router escalated and Claude wrote the answer). Older rows may show a cache hit as `ESCALATE` with
 `cache_hit` true; `scripts/backfill_cache_decision.py` relabels them, and the dashboard already reads them as `CACHE`.
 
-## Columns (47)
+## Columns (50)
 
 Blank means "not applicable to this row" or "not recorded by the version of the pipeline that wrote it".
 
@@ -56,6 +56,18 @@ Blank means "not applicable to this row" or "not recorded by the version of the 
 | `router_cutoff` | The line the prediction was compared with: below it, escalate. Blank under the threshold rule |
 | `threshold_used` | The confidence pass mark, when the **threshold rule** decided. Blank under the learned router |
 | `decision` | `LOCAL`, `CACHE` or `ESCALATE` |
+
+### Personal-data filter
+
+The text columns (`query`, `tier1_answer`, `final_answer`, `cache_matched_query` and the quality notes) hold the **filtered**
+copy for every row logged since the filter was added: patterned identifiers are replaced with placeholders such as `[CARD_NUMBER]`
+or `[CARD_LAST4]`. Rows logged earlier hold the original text until `scripts/redact_history.py --apply` is run on them.
+
+| Column | Meaning |
+|---|---|
+| `pii_filter` | Which filter version processed the row (for example `regex-v2`), `regex-v2-retro` if it was applied afterwards by `scripts/redact_history.py`, or `off` if the run used `--no-redact`. Blank on rows that predate the filter |
+| `pii_count` | How many identifiers were replaced in the question, Tier 1's answer and the final answer together |
+| `pii_types` | The identifier types found, sorted and comma-separated (for example `CARD_LAST4,EMAIL`), or empty |
 
 ### The cache
 

@@ -24,3 +24,6 @@ training/outputs/
 *.gguf
 # Cached embeddings written by scripts/train_router.py: 20 MB, regenerated in about seven minutes
 results/analysis/*.npz
+
+# Run reports hold question text, so they are not committed
+results/reports/

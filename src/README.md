@@ -10,17 +10,18 @@ those only work when `src` is run as a package.
 1. **Tier 1** (`tier1.py`) sends the question, wrapped in the business unit's persona, to that unit's local model
    in Ollama. The model writes an answer, and Ollama returns the probability of every word, from which two confidence
    figures are computed.
-2. **The router** decides. By default this is the **learned router** (`learned_router.py`): it predicts the quality
+2. **The personal-data filter** (`privacy.py`) makes a redacted copy of the question and of Tier 1's answer. Tier 1 itself saw the original, because it runs on your own computer; everything that leaves it or is stored uses the redacted copy.
+3. **The router** decides. By default this is the **learned router** (`learned_router.py`): it predicts the quality
    (1 to 5) Claude would give Tier 1's answer, from the question, the answer, the confidence and the business unit,
    and escalates if the prediction is below its cut-point. With `--threshold-router` it is instead the older rule
    (`router.py`): escalate if confidence is below the unit's pass mark.
-3. If the router kept the answer, the decision is **`LOCAL`** and Tier 1's answer is the final answer.
-4. If it escalated, the **semantic cache** (`semantic_cache.py`) looks for an earlier Claude answer to a near-exact
+4. If the router kept the answer, the decision is **`LOCAL`** and Tier 1's answer is the final answer.
+5. If it escalated, the **semantic cache** (`semantic_cache.py`) looks for an earlier Claude answer to a near-exact
    repeat of the question. A hit is **`CACHE`**: that answer is re-served and Claude is not called.
-5. Otherwise **Tier 2** (`tier2_escalate.py`) asks Claude Haiku 4.5, and the decision is **`ESCALATE`**.
-6. When the whole batch has been answered, **quality scoring** (`quality.py`) has Claude Sonnet 5 mark every final
+6. Otherwise **Tier 2** (`tier2_escalate.py`) asks Claude Haiku 4.5, and the decision is **`ESCALATE`**.
+7. When the whole batch has been answered, **quality scoring** (`quality.py`) has Claude Sonnet 5 mark every final
    answer, and every escalated row's discarded Tier 1 draft, from 1 to 5 on five dimensions.
-7. `pipeline.py` writes everything to the logs in `results/logs/`, which the dashboard reads.
+8. `pipeline.py` writes everything to the logs in `results/logs/`, which the dashboard reads.
 
 ## The files
 
@@ -29,11 +30,13 @@ those only work when `src` is run as a package.
 | `config.py` | Which Ollama model each business unit uses, the persona it answers as, and Ollama's address. Edit this to change a model or add a unit |
 | `tier1.py` | Calls the local model and computes confidence (average and minimum token probability). Retries a hung call 3 times; needs Ollama v0.12.11 or newer |
 | `learned_router.py` | The default router: trains, saves, loads and applies the text model that predicts answer quality, and holds the cut-point. Trained by `scripts/train_text_router.py` |
+| `privacy.py` | The personal-data filter: finds patterned identifiers (emails, phones, card numbers, IBANs, account numbers, national IDs, card last-four, dates of birth, postcodes, names after a cue) and replaces them with placeholders. Does not catch free-text names or addresses. `--no-redact` turns it off |
 | `router.py` | The older confidence-threshold rule, kept for `--threshold-router` comparisons and its tests |
 | `semantic_cache.py` | Finds a past Claude answer for a near-exact repeat (similarity at least 0.95, no negation mismatch, same category and intent) |
 | `tier2_escalate.py` | Calls Claude Haiku 4.5 for escalated questions, records its token use and cost, and logs which prompt wording was used |
 | `quality.py` | The Claude-as-examiner scoring and its rubric, plus the project's first ground-truth scoring helpers |
 | `pipeline.py` | Wires everything together, draws the random sample, logs every decision, scores quality, and writes the logs |
+| `run_report.py` | Turns one run, from the saved log or from pasted console output, into a plain table with a summary and a list of problems. Used by `scripts/export_run_report.py` |
 | `evaluate.py` | Summary tables for the latest run: resolution rate, latency, cost and the all-Claude baseline |
 
 ## Running the pipeline
