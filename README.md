@@ -100,9 +100,10 @@ two-tier-system/
 |-- models/router/             the trained learned router and its list of "words it weighs"
 |-- prompts/                   extra per-business-unit instructions added to Tier 1's prompt
 |-- data/synthetic/            the ten synthetic question files the pipeline samples from (committed)
+|-- data/generated/            fresh question batches (made by --fresh or scripts/generate_questions.py)
 |-- data/raw/                  downloaded datasets (not committed; fetched by scripts)
 |-- dashboard/                 the live dashboard: FastAPI backend and prebuilt React frontend
-|-- tests/                     45 automated tests
+|-- tests/                     158 automated tests
 |-- governance/                evidence for a governed pilot: model inventory, data flow, controls matrix, gap register
 |-- results/logs/              every run's records (not committed; created by the pipeline)
 |-- results/analysis/          saved outputs of the research scripts (committed)
@@ -238,7 +239,7 @@ If the two differ, either install the matching version (`pip install "scikit-lea
 ### Step 7. Check everything works
 
 ```powershell
-python -m pytest tests/ -q          # 45 passed. No Ollama or Claude key needed
+python -m pytest tests/ -q          # 158 passed. No Ollama or Claude key needed
 python -m src.config                # prints the models each unit will use
 ollama list                         # both models for Step 5 are listed
 python -m src.tier1                 # one real local answer, with its confidence
@@ -262,7 +263,7 @@ Run all commands from the project folder with the venv active, Ollama running, a
 ### The pipeline
 
 ```
-python -m src.pipeline [N] [--threshold-router] [--nocache] [--noquality] [--no-redact] [--score-quality-local MODEL]
+python -m src.pipeline [N] [--threshold-router] [--nocache] [--noquality] [--no-redact] [--questions PATH] [--fresh] [--pool] [--generator-model NAME] [--label-model NAME] [--label-method NAME] [--seed N] [--score-quality-local MODEL]
 ```
 
 | Part | Meaning | Default |
@@ -272,6 +273,13 @@ python -m src.pipeline [N] [--threshold-router] [--nocache] [--noquality] [--no-
 | `--nocache` | Do not use the semantic cache, so every escalation calls Claude | cache on |
 | `--noquality` | Skip the Claude quality marking after the run. Quality columns stay blank (fill them later, section 8) | marking on |
 | `--no-redact` | Turn the personal-data filter off, so raw question text goes to Claude, the examiner and the log. Only for reproducing older runs (section 8) | filter on |
+| `--questions PATH` | Draw the questions from a CSV (or a folder of CSVs) instead of the built-in pool, for example a batch made by `scripts/generate_questions.py`. Each row records its source in `question_source` | built-in pool |
+| `--fresh` | First make N fresh customer questions with a separate local model (default `qwen2.5:7b`), replacing the previous fresh batch, then run on them as usual. Needs Ollama running and the model downloaded | built-in pool |
+| `--pool` | Use the built-in pool even if `FRESH_BY_DEFAULT` is set to `True` in `src/pipeline.py` | |
+| `--generator-model NAME` | The model that writes the fresh questions (only with `--fresh`) | `qwen2.5:7b` |
+| `--label-model NAME` | A separate model that checks each fresh question's label (only with `--fresh`), so the generator does not mark its own work |
+| `--label-method NAME` | How the judge is asked: `examples` (default), `number`, `shuffled`, `name`, `two-step` or `category`. Measure them first with `scripts/evaluate_label_judge.py` (only with `--fresh`) |
+| `--seed N` | Draw the same questions every time you pass the same number | a different draw each run |
 | `--score-quality-local MODEL` | Also mark answers with the local Ollama model `MODEL`: a cheap first pass written to separate `quality_local_*` columns, not the numbers to report | off |
 
 Unknown options are rejected with the list of valid ones. Examples:
@@ -316,7 +324,7 @@ python -m src.evaluate        # writes results/tables/summary_metrics.csv and bu
 | `python -m src.tier1` | One real local answer and its confidence (needs Ollama and the models) |
 | `python -m src.tier2_escalate` | One real Claude answer (needs the key; costs a fraction of a cent) |
 | `python -m src.quality` | A demonstration of the ground-truth scoring helpers (no API call) |
-| `python -m pytest tests/ -q` | The 45 automated tests |
+| `python -m pytest tests/ -q` | The 158 automated tests |
 
 ### Ollama commands you will use
 
@@ -364,6 +372,16 @@ quietly falls back to another rule. `--threshold-router` is the deliberate way t
 row's discarded Tier 1 draft, from 1 to 5 on correctness, completeness, tone, safety and clarity. Local rows copy their
 final marks to the draft columns, so no quality cell is left blank.
 
+**Fresh questions every run.** By default the pipeline draws from a fixed pool of 16,000 synthetic questions, so the same wording comes round again, which flatters the cache and lets the router meet questions it has effectively seen. To have a different set every time, download a general model once (`ollama pull qwen2.5:7b`) and add `--fresh`:
+
+```
+python -m src.pipeline 100 --fresh
+```
+
+Before anything else, the pipeline asks that separate model for 100 new customer questions (a few minutes), checks each for repeats and for the right request type, **deletes the previous fresh batch** and replaces it, unloads the generator, and then runs exactly as usual, taking the questions one by one. Only the pipeline's own batch (`data/generated/current_batch.csv`) is ever deleted; batches you make by hand with `scripts/generate_questions.py` are kept. A small file of one-way fingerprints (`data/generated/seen_questions.txt`) stops a deleted question coming back, and holds no question text. Each logged row records where its question came from in `question_source` (for example `generated:qwen2.5:7b:seed48213`), and the log keeps a filtered copy of every question that was asked. Pass `--seed N` to repeat a batch exactly (same model and prompt), and set `FRESH_BY_DEFAULT = True` in `src/pipeline.py` to make every run fresh (`--pool` then uses the built-in pool for one run). The batch keeps the pool's mix: every request type is drawn first and retried until it passes, and a type the model cannot produce is reported and left out, so a run can be a few questions short but is never padded with easier types. If generation fails, the run stops before any model loads and the previous batch is kept.
+
+By default one model, `qwen2.5:7b`, both writes the questions and checks their labels, asking the judge with example questions beside each label (the way that scored best when measured). Name a different judge with `--label-model` if you want the writer and the judge to be separate models. The generator is not one of your fine-tuned helpers and never sees their answers. Its questions are still synthetic, and a small model checks their labels, so read a few before trusting a run (`python scripts/generate_questions.py --n 20 --show 20` shows a sample without running anything).
+
 **The personal-data filter** is on by default. Tier 1 runs on your own computer and sees the question as typed, but everything that leaves it or is stored (the question sent to Claude, the cache lookup, the question and answers sent to Claude as examiner, and the log) is first filtered by `src/privacy.py`, which replaces patterned identifiers with placeholders such as `[CARD_NUMBER]`. A question is filtered in full; an answer only for customer-identifier types and for values the customer typed. It catches emails, phone numbers, card numbers (Luhn-checked), IBANs, account numbers, sort codes, national IDs, a card's last four digits, dates of birth after a cue, UK postcodes, and names after a cue ("my name is", "Mr"). It does **not** catch free-text names or street addresses (0% on our generated test set), and it has not been tested on real customer text. Measure it with `scripts/evaluate_privacy_filter.py`. `--no-redact` turns it off, only to reproduce older runs.
 
 **The semantic cache** is on by default. For a question the router escalated, it looks for an earlier Claude answer to a
@@ -379,6 +397,8 @@ downloads a small embedding model (about 90 MB).
 | `scripts/backfill_run_id.py [RUN_ID]` | One-off: adds a `run_id` column to logs from before run ids existed | the id to use, default `run-default` |
 | `scripts/recover_missing_run.py` | Adds a finished run that did not reach the history file (it was open in Excel) | none |
 | `scripts/export_run_report.py` | Shows a run as one plain table with a summary and a list of problems, and saves CSV and Excel files. `--console FILE` also recovers rows that failed and were never saved | `--run`, `--list`, `--console`, `--out-dir`, `--no-files`, `--rows` |
+| `scripts/generate_questions.py` | Makes a batch of fresh customer questions with a separate local model (default `qwen2.5:7b`), checks and de-duplicates them, and saves a CSV for `--questions` | `--n`, `--seed`, `--model`, `--out`, `--unit`, `--exception-share`, `--temperature`, `--no-label-check`, `--dedup-pool`, `--show` |
+| `scripts/evaluate_label_judge.py` | Measures how well a model can tell which request type a question expresses, using pool questions with known labels, for six ways of asking and any models you name; recommends one. No Claude call, no cost | `--n`, `--model`, `--methods`, `--sample`, `--seed`, `--show-wrong`, `--out` |
 | `scripts/redact_history.py` | Removes personal identifiers from text already stored in the logs. Dry run by default; `--apply` backs up first | `--apply` |
 | `scripts/evaluate_privacy_filter.py` | Measures the filter's recall per identifier type on generated cases, and its false alarms | `--n`, `--seed`, `--sample`, `--min-recall`, `--out` |
 
@@ -408,7 +428,7 @@ took about an hour per fold; frozen mode takes about 7 minutes in all.
 ## 11. Tests
 
 ```powershell
-python -m pytest tests/ -q          # 45 tests, about three seconds
+python -m pytest tests/ -q          # 158 tests, about three seconds
 ```
 
 Twelve tests cover the learned router (predictions, the exact cut-point rule, saving and loading, and each

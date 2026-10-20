@@ -124,7 +124,7 @@ def judge_answer_quality_local(model: str, query: str, answer: str, ollama_url: 
     signal, not as the numbers you report: compare against judge_answer_quality() on an
     overlapping sample (run scripts/backfill_quality_scores.py both ways, with and without
     --judge-local, and compare the two sets of columns) before trusting it on its own for
-    anything you cite. model must already be pulled in Ollama (e.g. "llama3.2:3b") -- a
+    anything you cite. model must already be pulled in Ollama (e.g. "qwen2.5:7b") -- a
     model NOT already fine-tuned as one of your production assistants is the right choice
     here, so the judge isn't evaluating its own family's output style.
     """

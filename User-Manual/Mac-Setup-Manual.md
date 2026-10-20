@@ -239,7 +239,7 @@ The first is large (several GB, because the cache and the router's research tool
 python -m pytest tests/ -q
 ```
 
-**You should see `45 passed`.** These tests need no models and no key, so they confirm the Python side is healthy. Then check the scikit-learn version, which matters because the
+**You should see `158 passed`.** These tests need no models and no key, so they confirm the Python side is healthy. Then check the scikit-learn version, which matters because the
 router's saved model only loads under the version that trained it:
 
 ```
@@ -347,7 +347,7 @@ and a `Decision` of `LOCAL`, `CACHE` or `ESCALATE`), then a stage of **quality s
 ### 7.3 The options
 
 ```
-python -m src.pipeline [N] [--threshold-router] [--nocache] [--noquality] [--no-redact] [--score-quality-local MODEL]
+python -m src.pipeline [N] [--threshold-router] [--nocache] [--noquality] [--no-redact] [--questions PATH] [--fresh] [--pool] [--generator-model NAME] [--label-model NAME] [--label-method NAME] [--seed N] [--score-quality-local MODEL]
 ```
 
 | Option | Effect |
@@ -357,6 +357,13 @@ python -m src.pipeline [N] [--threshold-router] [--nocache] [--noquality] [--no-
 | `--nocache` | Do not re-use old Claude answers |
 | `--noquality` | Skip the Claude quality marking (cheaper). Fill it in later with `python scripts/backfill_quality_scores.py` |
 | `--no-redact` | Turn the personal-data filter off. It is on by default and replaces card numbers, emails, phones and similar identifiers before text goes to Claude or the log. Use only to reproduce older runs |
+| `--questions PATH` | Draw the questions from a CSV or a folder of CSVs, for example a batch of fresh questions made by `python scripts/generate_questions.py` (needs `ollama pull qwen2.5:7b` first) |
+| `--fresh` | First make fresh customer questions with a separate local model (needs `ollama pull qwen2.5:7b` once), replacing the previous fresh batch, then run as usual |
+| `--pool` | Use the built-in pool even if fresh questions have been made the default |
+| `--generator-model NAME` | The model that writes the fresh questions (only with `--fresh`) |
+| `--label-model NAME` | A separate model that checks each fresh question's label (only with `--fresh`), so the generator does not mark its own work |
+| `--label-method NAME` | How the judge is asked: `examples` (default), `number`, `shuffled`, `name`, `two-step` or `category`. Measure them first with `scripts/evaluate_label_judge.py` (only with `--fresh`) |
+| `--seed N` | Draw the same questions every time you pass the same number |
 | `--score-quality-local MODEL` | Also mark with a local Ollama model into separate columns (a cheap extra opinion) |
 
 **Keep the Mac awake during long runs** (below 100 questions it rarely matters): run `caffeinate -dimsu python -m src.pipeline 300` and the Mac will not sleep until it finishes.
@@ -585,7 +592,7 @@ already fit. But your models are your own training run, so for the best match, b
 ## 12. Check the finished system
 
 ```
-python -m pytest tests/ -q                       # 45 passed
+python -m pytest tests/ -q                       # 158 passed
 python -m src.pipeline 100                       # the full system: learned router, cache, Claude, marking
 python -m uvicorn dashboard.backend.main:app --port 8000
 ```
@@ -683,7 +690,7 @@ Tick each when done. The "Check" is what proves it.
 - [ ] `git clone ...` done; `ls` in `~/Projects/two-tier-system` shows `src`, `scripts`, `data`
 - [ ] `python3.12 -m venv venv`; `source venv/bin/activate` shows `(venv)`
 - [ ] `pip install -r requirements.txt` and `-r dashboard/backend/requirements.txt` finished
-- [ ] `python -m pytest tests/ -q` shows **45 passed**
+- [ ] `python -m pytest tests/ -q` shows **158 passed**
 - [ ] scikit-learn version matches the router (or you will retrain)
 - [ ] Claude key saved with `read -s`; `echo ${ANTHROPIC_API_KEY:0:7}` prints `sk-ant-`
 - [ ] `ollama pull phi3:mini` and `ollama pull qwen2.5:1.5b`; `sed` edit applied; `python -m src.config` shows them
@@ -710,4 +717,4 @@ Tick each when done. The "Check" is what proves it.
 - [ ] `python -m src.pipeline 500 --threshold-router` finished (history built with the new models)
 - [ ] `python scripts/train_text_router.py` saved a router
 - [ ] `python -m src.pipeline 100` runs with the learned router; the dashboard shows it
-- [ ] `python -m pytest tests/ -q` shows 45 passed
+- [ ] `python -m pytest tests/ -q` shows 158 passed

@@ -18,7 +18,7 @@ Every row has exactly one `decision`: **`LOCAL`** (Tier 1's answer was sent), **
 re-served) or **`ESCALATE`** (the router escalated and Claude wrote the answer). Older rows may show a cache hit as `ESCALATE` with
 `cache_hit` true; `scripts/backfill_cache_decision.py` relabels them, and the dashboard already reads them as `CACHE`.
 
-## Columns (50)
+## Columns (51)
 
 Blank means "not applicable to this row" or "not recorded by the version of the pipeline that wrote it".
 
@@ -42,6 +42,7 @@ Blank means "not applicable to this row" or "not recorded by the version of the 
 | `category`, `intent` | The question's data category and specific request type |
 | `is_exception` | True for fraud, hardship, bereavement and similar scenarios |
 | `query` | The customer's question |
+| `question_source` | Where the question came from: `synthetic-pool` for the built-in pool, the file or folder name when the run used `--questions`, or `generated:<model>:seed<N>` when the run used `--fresh` (the seed repeats that batch). Blank on rows from before this column existed |
 
 ### Tier 1 and the router
 
@@ -65,7 +66,7 @@ or `[CARD_LAST4]`. Rows logged earlier hold the original text until `scripts/red
 
 | Column | Meaning |
 |---|---|
-| `pii_filter` | Which filter version processed the row (for example `regex-v2`), `regex-v2-retro` if it was applied afterwards by `scripts/redact_history.py`, or `off` if the run used `--no-redact`. Blank on rows that predate the filter |
+| `pii_filter` | Which filter version processed the row (for example `regex-v3`), `regex-v3-retro` if it was applied afterwards by `scripts/redact_history.py`, or `off` if the run used `--no-redact`. Blank on rows that predate the filter |
 | `pii_count` | How many identifiers were replaced in the question, Tier 1's answer and the final answer together |
 | `pii_types` | The identifier types found, sorted and comma-separated (for example `CARD_LAST4,EMAIL`), or empty |
 

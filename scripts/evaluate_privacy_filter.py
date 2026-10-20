@@ -33,8 +33,8 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.privacy import FILTER_VERSION, redact
 
-COVERED = ["EMAIL", "PHONE", "CARD_NUMBER", "IBAN", "ACCOUNT_NUMBER", "SORT_CODE", "NATIONAL_ID", "CARD_LAST4",
-           "DATE_OF_BIRTH", "POSTCODE", "NAME_CUE", "NAME_TITLE"]
+COVERED = ["EMAIL", "PHONE", "CARD_NUMBER", "IBAN", "ACCOUNT_NUMBER", "SORT_CODE", "NATIONAL_ID", "CARD_LAST4", "CARD_BARE",
+           "CARD_ENDING_LONG", "DATE_OF_BIRTH", "POSTCODE", "NAME_CUE", "NAME_TITLE"]
 NOT_COVERED = ["NAME_FREE", "ADDRESS_FREE"]
 FIRST = ["Priya", "Rahul", "Anita", "Vikram", "Meera", "Arjun", "Sara", "Daniel", "Emma", "Omar"]
 LAST = ["Nair", "Sharma", "Rao", "Mehta", "Khan", "Patel", "Smith", "Jones", "Brown", "Singh"]
@@ -102,6 +102,12 @@ def make_case(kind: str, rng):
     if kind == "CARD_LAST4":
         v = digits(rng, 4)
         return v, frame.format(v=rng.choice([f"the card ending {v}", f"last four digits {v}"]))
+    if kind == "CARD_BARE":
+        v = digits(rng, 4)
+        return v, frame.format(v=rng.choice([f"my card {v}", f"the card number {v}", f"card no. {v}", f"Mastercard {v}", f"card #{v}"]))
+    if kind == "CARD_ENDING_LONG":
+        v = digits(rng, rng.choice([5, 6]))
+        return v, frame.format(v=f"my card ending {v}")
     if kind == "DATE_OF_BIRTH":
         v = f"{rng.randint(1, 28):02d}/{rng.randint(1, 12):02d}/{rng.randint(1950, 2004)}"
         return v, frame.format(v=rng.choice([f"I was born on {v}", f"DOB: {v}"]))
@@ -127,7 +133,8 @@ LOOKALIKES = ["I was charged $1,300 at the shop.", "The loan is 50000 rupees ove
               "I paid on 12/05/2024 and again on 03/06/2024.", "My reference is 4829 and the ticket is 123456.",
               "The meeting is at 10:30 on Friday.", "Transfer 2020 dollars to savings.", "Is ISO 20022 supported?",
               "Interest was 3.2% on 15000 for 2 years.", "Order 98765 arrived on 01/02/2025.", "Please raise the limit to 25,000.",
-              "Version 2.1.4 of the app crashes.", "The fee is 12.50 per month."]
+              "Version 2.1.4 of the app crashes.", "The fee is 12.50 per month.", "My card expires in 2027.", "I renewed my card in 2026.",
+              "Card payments of 2500 rupees went through.", "I have 3 cards with you.", "The 2024 card offer ended."]
 
 
 def main() -> None:

@@ -14,6 +14,7 @@ This describes the pipeline as built (`src/pipeline.py`). It is the document tha
 | 6 | Logs | Filtered question, filtered answers, audit columns | Local disk, `results/logs/` | Yes | Rows logged before the filter existed hold raw text until `scripts/redact_history.py --apply` is run |
 | 7 | Dashboard | Reads the logs | Local | n/a | Shows filtered text |
 | 8 | Model training on Colab | Bitext training data and synthetic examples | Google Colab and Google Drive | n/a | No customer data is used |
+| 9 | Fresh test questions (`--fresh`, or `scripts/generate_questions.py`) | Prompts built from synthetic questions in `data/synthetic/` | A general model in Ollama on your server | n/a | No customer data is used and nothing leaves your server. The generator never sees any helper's or Claude's answers. A fresh run replaces `data/generated/current_batch.csv` and keeps only one-way fingerprints of earlier questions |
 
 ## How much reaches the external provider
 
@@ -24,7 +25,7 @@ This describes the pipeline as built (`src/pipeline.py`). It is the document tha
   was 8 (69 local, 23 from the cache, 8 to Claude).
 - Cache hits do not call Claude.
 
-## What the filter does (`src/privacy.py`, version `regex-v2`)
+## What the filter does (`src/privacy.py`, version `regex-v3`)
 
 - **Questions** are filtered in full: emails, phone numbers, card numbers (Luhn-checked), IBANs (mod-97-checked), account numbers,
   sort codes, national IDs, a card's last four digits, dates of birth after a cue, UK postcodes, and names after a cue.
@@ -39,11 +40,13 @@ Run `python scripts/evaluate_privacy_filter.py` to reproduce these (seed 7, 200 
 
 | Measurement | Result |
 |---|---|
-| Recall, 12 covered types, on generated cases | 100% each. **This is a ceiling:** the generated values are in the formats the filter knows |
+| Recall, 14 covered types, on generated cases | 100% each. **This is a ceiling:** the generated values are in the formats the filter knows |
 | Recall for free-text names ("I'm Priya") | 0% (not designed to be caught) |
 | Recall for free-text street addresses | 0% (not designed to be caught) |
-| Look-alikes left unchanged (amounts, dates, rates, references) | 12 of 12 |
+| Look-alikes left unchanged (amounts, dates, rates, years near the word card, references) | 17 of 17 |
 | Real synthetic questions changed (3,000 sampled) | 144 (4.8%), all because of a card's last four digits |
+| Real logged history (6,310 rows) | 968 identifiers found, 318 questions changed: the same under `regex-v3` as under `regex-v2`, so the wider card-digit rule caused no new false alarms there |
+| Known limits of the card-digit rule | `Visa 4421` is not caught (Visa is also a travel document); a year straight after the word card (`card 2026`) would be replaced by mistake |
 | Your 6,310-row history, dry run of `redact_history.py` | 968 identifiers: 957 card last-four, 11 names; no public contact details were removed |
 
 ## What this does not show

@@ -41,6 +41,10 @@ To regenerate (same `SEED` gives identical files): `python scripts/generate_synt
 You need `raw/` only to train models, which happens on Google Colab (see `training/README.md`). Running the pipeline, the router
 training and the dashboard need only `synthetic/`. Deleting `raw/` costs nothing: run the scripts again.
 
+## generated/ (made by a script)
+
+Batches of freshly generated questions, written by `scripts/generate_questions.py`. See `data/generated/README.md`. They are test questions, never training data.
+
 ## Keeping training data out of the tests
 
 A model must never be tested on a question it was trained on, because it would look more confident than it really is. So

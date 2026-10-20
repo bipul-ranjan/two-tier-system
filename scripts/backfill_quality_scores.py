@@ -26,7 +26,7 @@ are left untouched, not re-scored and not re-billed.
 
 Run from the project root:
     python scripts/backfill_quality_scores.py                       # Claude, needs ANTHROPIC_API_KEY
-    python scripts/backfill_quality_scores.py --judge-local llama3.2:3b   # local, needs Ollama running
+    python scripts/backfill_quality_scores.py --judge-local qwen2.5:7b   # local, needs Ollama running
     python scripts/backfill_quality_scores.py --draft                # Claude judges escalated drafts; local rows copy their final scores
     python scripts/backfill_quality_scores.py --unit retail_bank --run run-29-Sep-26-09:44
     python scripts/backfill_quality_scores.py --limit 200            # cap how many rows this pass

@@ -37,6 +37,8 @@ those only work when `src` is run as a package.
 | `quality.py` | The Claude-as-examiner scoring and its rubric, plus the project's first ground-truth scoring helpers |
 | `pipeline.py` | Wires everything together, draws the random sample, logs every decision, scores quality, and writes the logs |
 | `run_report.py` | Turns one run, from the saved log or from pasted console output, into a plain table with a summary and a list of problems. Used by `scripts/export_run_report.py` |
+| `question_generator.py` | Makes fresh customer questions with a separate local model (prompt, cleaning, duplicate and label checks). Used by `scripts/generate_questions.py`; the pipeline reads the result with `--questions` |
+| `label_judge.py` | Six ways of asking a model which request type a question expresses (number, shuffled, name, two-step, examples, category) and the evaluation that measures each on questions with known labels. Used by `scripts/evaluate_label_judge.py` and by the generator's label check |
 | `evaluate.py` | Summary tables for the latest run: resolution rate, latency, cost and the all-Claude baseline |
 
 ## Running the pipeline

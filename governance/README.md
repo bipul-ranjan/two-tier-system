@@ -31,4 +31,4 @@ These summaries come from secondary sources. Read the primary texts, and ask you
 ## Keeping it true
 
 Update these files whenever a model, a prompt, a threshold, the filter or a data flow changes. The router version label, the filter
-version (`pii_filter` column) and the 45 automated tests are the change evidence the code already produces.
+version (`pii_filter` column) and the 158 automated tests are the change evidence the code already produces.

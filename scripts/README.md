@@ -20,6 +20,8 @@ ones with options print them with `--help`.
 | Get training data for the two models | `fetch_bitext_banking.py`, then `generate_exception_training_data.py` for the retail unit |
 | Run the pipeline and be sure every quality mark is filled in | `run_and_score.py` |
 | See a run as one plain table (and spot rows that failed) | `export_run_report.py` |
+| Make fresh customer questions so every run is different | `generate_questions.py` |
+| Check whether the label judge can be trusted, and pick how to ask it | `evaluate_label_judge.py` |
 | Fill in quality marks that are blank | `backfill_quality_scores.py`, then again with `--draft` |
 | Train, or retrain, the learned router | `train_text_router.py` |
 | Recover a run that did not reach the history file | `recover_missing_run.py` |
@@ -142,6 +144,72 @@ or `python -m src.pipeline 100 | tee run_console.txt` (Mac and Linux). Or copy t
 
 The Excel file needs `pip install openpyxl`; without it you still get the CSV. Older logs that recorded a cache hit as `ESCALATE` are
 shown as `CACHE`, as on the dashboard.
+
+### generate_questions.py: fresh customer questions from a separate model
+
+Makes a batch of new customer questions with a general local model, so a test run does not keep drawing from the same fixed pool of
+16,000. For each question it picks a request type (in the pool's own mix, or with a chosen share of exceptions), a tone, a few made-up
+details (an amount, a card's last four digits, a merchant, a city, a time) and three existing questions of that type as examples, and
+asks the model for one new message. It then rejects empty, too short or too long text, anything that is not a customer message, exact
+duplicates (of the pool and of earlier batches) and near-duplicates by meaning, and checks that each question really expresses the intended
+request type, by asking the model to choose among every intent of the business unit (or only of the category with `--label-scope category`). Each question is saved with its seed, model, prompt version, tone and label-check result, so the same seed repeats the batch.
+
+Needs Ollama running and a general model, not one of your fine-tuned helpers: `ollama pull qwen2.5:7b`. It costs nothing and takes about
+2 to 6 seconds per accepted question. Look at a few first: `python scripts/generate_questions.py --n 20 --show 20`.
+
+| Option | Meaning | Default |
+|---|---|---|
+| `--n N` | Questions to produce | 100 |
+| `--seed N` | The batch seed (printed, so a batch can be repeated) | random |
+| `--model NAME` | The generator model | `qwen2.5:7b` |
+| `--out PATH` | The CSV to write | `data/generated/generated_questions_<date-time>.csv` |
+| `--unit NAME` | Only `payments` or only `retail_bank` | both |
+| `--exception-share X` | Share of questions from the exception categories, 0 to 1 | the pool's own mix |
+| `--temperature X` | Randomness of the generator, 0 to 2 (higher is more varied and less reliable) | 0.9 |
+| `--no-label-check` | Skip the check that each question expresses its intended request type | check on |
+| `--label-scope NAME` | What the label check chooses among: `unit` (every intent of the business unit, 23 for payments or 27 for retail bank, which catches a question that belongs to another category) or `category` (only the same category's intents; faster but it passes almost anything for a category with one or two intents) | `unit` |
+| `--per-slot-attempts N` | Tries per question slot before giving up on that request type. The types for the whole batch are drawn first, so the batch keeps the pool's mix; a type the model cannot produce is reported as unfilled and the batch is a little short, never padded with easier types | 6 |
+| `--label-model NAME` | A separate model to do the label check, so a small model does not mark its own work. A larger general model you have downloaded (it must appear in `ollama list`) is slower per check but a steadier judge | the generator model |
+| `--label-method NAME` | How the judge is asked: `examples` (default), `number`, `shuffled`, `name`, `two-step` or `category`. Measure them first with `scripts/evaluate_label_judge.py` |
+| `--save-rejected PATH` | Also write every rejected candidate (its text, request type, the reason and, for a label mismatch, what the judge chose instead) to a CSV | off |
+| `--dedup-pool` | Also refuse questions whose meaning is close to one in the 16,000-question pool (slower start) | exact copies only |
+| `--dedup-threshold X` | How alike two questions must be to count as near-duplicates. Raise it to accept more | 0.92 |
+| `--show N` | Print the first N generated questions | 0 |
+
+You rarely need to run this script yourself: `python -m src.pipeline 100 --fresh` does the same thing as the first step of a run, using `data/generated/current_batch.csv` and replacing the previous batch. Use the script to look at a sample (`--show`), to keep a batch under its own name (`--out`), or to make a batch to share. Reading the report: after a run with label mismatches it prints the most common mix-ups (what a question was meant to be, and what the judge chose
+instead) and the request types that passed the check least often. Read a few rows of the `--save-rejected` file. If the rejected questions look right and
+the judge is the one that is wrong, a larger `--label-model` should help. If the questions are off-target, the generator or the prompt is the problem. A reply that
+hits the length limit, or stops on a comma, colon or dash, is rejected as `cut_off`.
+
+Then run the pipeline on a kept batch: `python -m src.pipeline 100 --questions data/generated/<file>.csv`. The summary prints the label-check
+pass rate. A low rate means the model struggles with those request types, so treat the labels in that batch with care.
+
+### evaluate_label_judge.py: can the label judge be trusted?
+
+The generator keeps a question only if a judge model picks its intended request type from 23 or 27 options. In real runs the judge rejected most
+good-looking questions and sometimes named unrelated types, so the generator's output cannot be trusted until the judge is measured. This script
+tests the judge on pool questions whose labels are known to be right, so no generator is involved, no Claude call is made and nothing costs money.
+
+It tests six ways of asking (`src/label_judge.py`): `number` (the original check), `shuffled` (options in random order), `name` (the model replies with the
+option's text), `two-step` (the category first, then the intent), `examples` (each option shows a real example question) and `category` (the easier
+old check, which is told the category and so is only a reference). For each model and method it prints the accuracy with a 95% interval, the share of
+unreadable replies and the calls per question. It also shows whether the judge does worse on options near the end of the list, which request types it
+gets wrong most often, the mix-ups that repeat (intended type against the type the judge chose), and a recommendation that says plainly when two methods cannot be told apart. With few questions per request type the list of wrong types is marked as rough; use `--n 150` or more for firmer patterns. Chance is about 4%. Below about 60% a judge is
+too unreliable to decide which generated questions to keep. Start small: `python scripts/evaluate_label_judge.py --n 50 --methods number,examples`.
+The full default (100 questions, six methods) is about 700 calls, so 15 to 30 minutes per model.
+
+| Option | Meaning | Default |
+|---|---|---|
+| `--n N` | Questions to test per method | 100 |
+| `--model NAMES` | One judge model, or several separated by commas (each must be in `ollama list`), for example `qwen2.5:7b,llama3.1:8b` | `qwen2.5:7b` |
+| `--methods NAMES` | The methods to test, separated by commas | all six |
+| `--sample NAME` | `even` (the same number from every request type) or `pool` (random questions, as the pool is mixed) | `even` |
+| `--seed N` | The seed for the choice of questions and shuffles; the same seed tests the same questions | 1 |
+| `--show-wrong N` | Print N wrong answers for the best method of each model | 5 |
+| `--out PATH` | Where to save every answer as a CSV | `results/analysis/label_judge_<date-time>.csv` |
+
+Then use the best way of asking: `python scripts/generate_questions.py --label-method examples --label-model NAME`, or in a run
+`python -m src.pipeline 100 --fresh --label-method examples --label-model NAME`.
 
 ## 3. The learned router
 

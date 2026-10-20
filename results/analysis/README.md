@@ -8,6 +8,7 @@ Saved outputs of the research scripts that were used to choose the router. They 
 | `router_oof_finetune_all-MiniLM-L6-v2_L256_E3_F5_S0_N6310.csv` | `scripts/train_router.py --mode finetune` | The fine-tuned MiniLM router's held-out prediction for each of 6,310 rows. The name records the settings (256 tokens, 3 epochs, 5 folds, seed 0, 6,310 rows) |
 | `stage1_fold1_training_log.txt`, `stage1_fold1_report.txt` | Terminal output saved from `scripts/train_router.py` | The progress lines of the first fine-tuning fold (about an hour), and its first report, before all five folds were run. Kept as evidence; the **final** five-fold result is in the project documents, and fold 1 alone looked better than the full run |
 | `router_embeddings_all-MiniLM-L6-v2_L256.npz` | `scripts/train_router.py` (frozen mode) | A 20 MB cache of MiniLM's reading of every question and answer. **Not worth keeping in Git**: it is regenerated in about seven minutes. It is listed in `.gitignore` |
+| `label_judge_<date-time>.csv` | `scripts/evaluate_label_judge.py` | Every answer from a measurement of the label judge: the question, its true request type, the method and model, what the judge chose and whether it was right. Not committed |
 
 Re-print a finished report without retraining: `python scripts/train_router.py --mode finetune --report-only` (use the same settings as
 the run that saved the folds).

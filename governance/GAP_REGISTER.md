@@ -22,6 +22,7 @@ gaps are accepted, which is why the scope statement on page one of any pack must
 | G13 | The filter's recall is measured on generated cases only | The 100% figure is a ceiling, not an estimate for real text | Medium | **Yes** | Measure on a real, labelled sample |
 | G14 | The use case could drift into an EU AI Act high-risk purpose (for example creditworthiness) | High-risk obligations would then apply (deferred to 2 December 2027) | Low now | Confirm | State the intended use, and re-assess before any change of purpose |
 | G15 | No named model owners, approvals or review cadence | SS1/23 expects accountability and an inventory with owners | Medium | Yes | Assign owners and approval steps in your model risk process |
+| G16 | Generated test questions are synthetic, and a small model checks their labels (by choosing among every intent of the business unit, which is stricter than before but still a small model's judgement) | A wrong label would distort per-intent analysis and the cache's third gate; real customers word things differently | Medium | No | Read a sample of every batch; report the label-check pass rate and the confusion report; read the rejected candidates (`--save-rejected`); measure the judge on known-label questions first (`scripts/evaluate_label_judge.py`) and pick the best way of asking (`--label-method`); use a larger, separate judge (`--label-model`); add human-written questions in a controlled pilot (see G11) |
 
 ## The order I would close them in
 

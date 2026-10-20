@@ -251,7 +251,7 @@ This creates a private box for the project's software, so it does not interfere 
 python -m pytest tests/ -q
 ```
 
-**You should see** `45 passed`. If you see `No module named pytest`, the environment is not active (step 3).
+**You should see** `158 passed`. If you see `No module named pytest`, the environment is not active (step 3).
 
 ---
 
@@ -392,7 +392,7 @@ and one file per business unit.
 ### The options
 
 ```
-python -m src.pipeline [N] [--threshold-router] [--nocache] [--noquality] [--no-redact] [--score-quality-local MODEL]
+python -m src.pipeline [N] [--threshold-router] [--nocache] [--noquality] [--no-redact] [--questions PATH] [--fresh] [--pool] [--generator-model NAME] [--label-model NAME] [--label-method NAME] [--seed N] [--score-quality-local MODEL]
 ```
 
 | Option | What it does | When to use it |
@@ -402,6 +402,13 @@ python -m src.pipeline [N] [--threshold-router] [--nocache] [--noquality] [--no-
 | `--nocache` | Do not look for a re-usable old Claude answer | To measure what the cache saves |
 | `--noquality` | Skip the quality marking after the run | To save money while testing. Fill the marks in later (section 13) |
 | `--no-redact` | Turn the personal-data filter off, so raw question text is sent to Claude and written to the log | Only to reproduce an older run. Leave it on otherwise |
+| `--questions PATH` | Draw the questions from a CSV or a folder of CSVs instead of the built-in pool, for example a batch of fresh questions | For fresh wording (see below) |
+| `--fresh` | First make fresh customer questions with a separate local model, replacing the previous fresh batch, then run as usual | When you want different wording every run |
+| `--pool` | Use the built-in pool even if fresh questions have been made the default | To switch fresh questions off for one run |
+| `--generator-model NAME` | The model that writes the fresh questions (only with `--fresh`) | To try a different generator |
+| `--label-model NAME` | A separate model that checks each fresh question's label (only with `--fresh`), so the generator does not mark its own work |
+| `--label-method NAME` | How the judge is asked: `examples` (default), `number`, `shuffled`, `name`, `two-step` or `category`. Measure them first with `scripts/evaluate_label_judge.py` (only with `--fresh`) |
+| `--seed N` | Draw the same questions every time you pass the same number | To repeat a run exactly |
 | `--score-quality-local MODEL` | Also mark with a local Ollama model, into separate columns | A cheap extra opinion; not the numbers to report |
 
 Examples:
@@ -417,6 +424,7 @@ If you mistype an option, the program stops and lists the valid ones.
 
 ### Things to know about a run
 
+* **Fresh questions every run.** The built-in pool of 16,000 questions repeats across runs, which flatters the cache. For a different set every time, download a general model once (`ollama pull qwen2.5:7b`) and run `python -m src.pipeline 100 --fresh`. Before anything else it asks that separate model for 100 new questions (a few minutes), checks them for repeats and for the right request type, deletes the previous fresh batch, and then runs exactly as usual, one question at a time. Only the pipeline's own batch is deleted; batches you made with `scripts/generate_questions.py` are kept. The generator is not one of your fine-tuned helpers. Its questions are still made up, and a small model checks their labels, so read a few (`python scripts/generate_questions.py --n 20 --show 20`) before trusting a run.
 * **A personal-data filter runs by default.** Your own computer (Tier 1) sees each question as typed, but before anything goes to Claude, the cache or the log, patterned identifiers such as card numbers, emails, phone numbers and account numbers are replaced with placeholders like `[CARD_NUMBER]`. It does **not** catch names or street addresses written in ordinary sentences, and it has not been tested on real customer text, so do not use real customer data. Measure it with `python scripts/evaluate_privacy_filter.py`, and clean older logs with `python scripts/redact_history.py` (a dry run unless you add `--apply`).
 * **Do not open `results_history.csv` in Excel during a run.** The program locks it from the start; an open copy blocks the final save. If that happens, close it and run `python scripts/recover_missing_run.py`.
 * **The questions are random** each time. To draw the same questions every run (needed for fair comparisons), open `src/pipeline.py`, find `SEED = None` near the top, and change it to a number such as `SEED = 42`.
@@ -445,7 +453,7 @@ Open them in Excel or any spreadsheet program (but not during a run). The **deci
 
 The most useful columns are `query`, `tier1_answer` (the small model's answer, kept even when discarded), `final_answer` (what the customer got), `decision`, `tier1_confidence_avg`,
 `router_predicted_quality` and `router_cutoff`, `estimated_cost_usd`, and the quality marks `quality_overall` (the final answer) and `quality_draft_overall` (the small
-model's own answer). **`results/logs/README.md` explains all 50 columns.**
+model's own answer). **`results/logs/README.md` explains all 51 columns.**
 
 ### A run as one plain table
 
@@ -610,6 +618,8 @@ All are run from the project folder with `(venv)` showing. All are safe to run a
 | `... --judge-local MODEL` | Mark with a local Ollama model instead of Claude, into separate `quality_local_*` columns (a cheap first look, not the numbers to report) |
 | `python scripts/run_and_score.py 100` | The pipeline, then both quality fills as a safety net. Any option after the number goes to the pipeline |
 | `python scripts/recover_missing_run.py` | Adds a finished run that did not reach the history file because the file was open in Excel |
+| `python scripts/generate_questions.py` | Makes a batch of fresh customer questions with a separate local model, for `--questions`. Needs `ollama pull qwen2.5:7b` first |
+| `python scripts/evaluate_label_judge.py` | Measures how well a model can tell which request type a question expresses, for six ways of asking, using pool questions with known labels. Run it before trusting the generator's label check |
 | `python scripts/redact_history.py` | Removes personal identifiers from logs already written. Reports first; `--apply` writes, after making a backup |
 | `python scripts/evaluate_privacy_filter.py` | Measures what the personal-data filter catches and misses on generated test cases |
 | `python scripts/backfill_cache_decision.py` | One-off: relabels old cache hits as `CACHE` in older logs |
@@ -782,7 +792,7 @@ cd Desktop\two-tier-system            (Mac: cd Desktop/two-tier-system)
 python -m pytest tests/ -q
 ```
 
-**You should see** `45 passed` in about two seconds. They need no Ollama, no Claude key and no data. Twelve test the learned router (its predictions, its exact cut-point rule, saving and loading, and each
+**You should see** `158 passed` in about two seconds. They need no Ollama, no Claude key and no data. Twelve test the learned router (its predictions, its exact cut-point rule, saving and loading, and each
 error message) and four test the older confidence rule. Run them after changing the router, after upgrading scikit-learn, and before sharing a copy. `tests/README.md` lists each test and what is not covered.
 
 ---
@@ -835,7 +845,7 @@ If you meet an error not listed here, copy the exact error message somewhere saf
 | `data/synthetic/` | The ten files of practice questions (included) |
 | `data/raw/` | Downloaded datasets (created by scripts; not included) (`data/README.md`) |
 | `dashboard/` | The dashboard (`dashboard/README.md`) |
-| `tests/` | The 45 automated tests (`tests/README.md`) |
+| `tests/` | The 158 automated tests (`tests/README.md`) |
 | `results/logs/` | Every run's records, created by the pipeline (`results/logs/README.md`) |
 | `results/tables/`, `results/plots/`, `results/analysis/` | Summary tables, charts, and the saved research outputs |
 | `User-Manual/` | This manual |

@@ -27,3 +27,11 @@ results/analysis/*.npz
 
 # Run reports hold question text, so they are not committed
 results/reports/
+
+# A fresh run replaces the current batch, and the ledger is local working state
+data/generated/current_batch.csv
+data/generated/current_batch.csv.tmp
+data/generated/seen_questions.txt
+
+# Measurements of the label judge hold pool questions and are regenerated on demand
+results/analysis/label_judge_*.csv

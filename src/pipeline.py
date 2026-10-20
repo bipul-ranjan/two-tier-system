@@ -51,6 +51,17 @@ Options, all optional and in any order after the number of questions:
                                learned router. Use it to compare the two routers on the same questions
     --nocache                  skip the semantic cache, so every escalation calls Claude
     --no-redact                turn the personal-data filter off (it is on by default); only for reproducing older runs
+    --questions PATH           draw the questions from a CSV (or a folder of CSVs) instead of the built-in pool, for example a batch
+                               from scripts/generate_questions.py; every row records its source in question_source
+    --fresh                    first make N fresh customer questions with a separate local model (default qwen2.5:7b), replacing the
+                               previous fresh batch, then run on them as usual; needs Ollama running and the model downloaded
+    --pool                     use the built-in pool even if FRESH_BY_DEFAULT is True
+    --generator-model NAME     the model that writes the fresh questions (only with --fresh)
+    --label-model NAME         a separate model that checks each question's label (only with --fresh); default: the generator itself
+    --label-method NAME        how that judge is asked: examples (default), number, shuffled, name, two-step or category; measure them first with
+                               scripts/evaluate_label_judge.py (only with --fresh)
+    --seed N                   draw the same questions every time you pass the same number (default: different each run);
+                               with --fresh it repeats the same generated batch (same model and prompt)
     --noquality                skip the Claude quality marking after the run (quality columns stay blank;
                                fill them later with scripts/backfill_quality_scores.py)
     --score-quality-local M    also mark answers with the local Ollama model M, a cheap first pass written to
@@ -104,6 +115,7 @@ LOGS_DIR = "results/logs"
 N_SAMPLES = 100
 SEED = None  # None = different random rows every run; set an int to reproduce a run
 REDACT_PII = True  # the personal-data filter (src/privacy.py); main() sets it False for --no-redact
+FRESH_BY_DEFAULT = False  # True: every run first makes fresh questions with a separate model (--pool opts out for one run)
 
 # Escalate anything scoring below its threshold. Threshold is set per business unit,
 # and can be set separately for normal vs. exception rows within a unit -- edit the
@@ -162,6 +174,34 @@ def load_random_sample(n: int = N_SAMPLES, seed=SEED) -> pd.DataFrame:
     sample = pool.sample(n=min(n, len(pool)), random_state=seed).reset_index(drop=True)
     sample["business_unit"] = sample["category"].map(unit_for_category)
     sample["is_exception"] = sample["category"].isin(EXCEPTION_CATEGORIES)
+    sample["question_source"] = "synthetic-pool"
+    return sample
+
+
+def load_question_file(path: str, n: int = N_SAMPLES, seed=SEED) -> pd.DataFrame:
+    """Draw n random rows from a CSV (or from every CSV in a folder) of questions, instead of the built-in pool.
+    The file needs the columns instruction, category and intent, which scripts/generate_questions.py writes. An unknown
+    category stops the run, so nothing is routed to the wrong business unit. Each row records where it came from in
+    question_source, so a run on generated questions can always be told apart from one on the fixed pool."""
+    if os.path.isdir(path):
+        files = sorted(glob.glob(os.path.join(path, "*.csv")))
+    elif os.path.isfile(path):
+        files = [path]
+    else:
+        raise FileNotFoundError(f"{path} not found. Make a batch first:  python scripts/generate_questions.py --n {n}")
+    if not files:
+        raise FileNotFoundError(f"No CSV files in {path}.")
+    pool = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+    missing = {"instruction", "category", "intent"} - set(pool.columns)
+    if missing:
+        raise ValueError(f"{path} is missing the column(s): {', '.join(sorted(missing))}")
+    pool = pool.dropna(subset=["instruction", "category", "intent"])
+    if pool.empty:
+        raise ValueError(f"{path} has no usable questions.")
+    sample = pool.sample(n=min(n, len(pool)), random_state=seed).reset_index(drop=True)
+    sample["business_unit"] = sample["category"].map(unit_for_category)
+    sample["is_exception"] = sample["category"].isin(EXCEPTION_CATEGORIES)
+    sample["question_source"] = os.path.basename(path.rstrip("/\\")) or path
     return sample
 
 
@@ -666,8 +706,10 @@ def run_pipeline(sample: pd.DataFrame, log_path: str = None, score_quality: bool
             failed = []
             for r in sample.itertuples(index=False):
                 try:
-                    rows.append(process_query(r.instruction, r.business_unit, r.category, r.intent, bool(r.is_exception), run_id,
-                                               cache_index=cache_index, router=router))
+                    row = process_query(r.instruction, r.business_unit, r.category, r.intent, bool(r.is_exception), run_id,
+                                        cache_index=cache_index, router=router)
+                    row["question_source"] = getattr(r, "question_source", "synthetic-pool")
+                    rows.append(row)
                 except Exception as e:
                     failed.append({"query": r.instruction, "business_unit": r.business_unit, "error": str(e)})
                     print(f"  WARNING: row failed and will be skipped ({type(e).__name__}: {e})")
@@ -729,30 +771,125 @@ def parse_cli_args(args: list) -> tuple:
         python -m src.pipeline 100 --noquality      # skip the post-run Claude quality evaluation
         python -m src.pipeline 100 --nocache --noquality
         python -m src.pipeline 100 --threshold-router   # route with the old confidence pass mark instead
-        python -m src.pipeline 100 --score-quality-local llama3.2:3b   # extra, opt-in local judge
+        python -m src.pipeline 100 --score-quality-local qwen2.5:7b   # extra, opt-in local judge
     """
     flags = {"--nocache", "--noquality", "--threshold-router", "--score-quality-local", "--no-redact"}
     unknown = [a for a in args if a.startswith("--") and a not in flags]
     if unknown:
         raise SystemExit(f"Unknown option(s): {' '.join(unknown)}. "
-                         f"Valid options: --nocache, --noquality, --threshold-router, --no-redact, --score-quality-local <model>")
+                         f"Valid options: --nocache, --noquality, --threshold-router, --no-redact, --score-quality-local <model>, --questions <csv or folder>, --fresh, --pool, --generator-model <model>, --label-model <model>, --label-method <name>, --seed <number>")
     local_judge_model = None
     if "--score-quality-local" in args:
         idx = args.index("--score-quality-local")
         if idx + 1 >= len(args):
-            raise SystemExit("--score-quality-local needs a model name, e.g. --score-quality-local llama3.2:3b")
+            raise SystemExit("--score-quality-local needs a model name, e.g. --score-quality-local qwen2.5:7b")
         local_judge_model = args[idx + 1]
     positional = [a for a in args if a not in flags and a != local_judge_model]
     n = int(positional[0]) if positional else N_SAMPLES
     return n, "--noquality" not in args, local_judge_model, "--nocache" not in args, "--threshold-router" not in args
 
 
+def _pop_option(args: list, name: str):
+    """Take a '--name VALUE' pair out of the argument list. Returns (value or None, the remaining arguments)."""
+    if name not in args:
+        return None, list(args)
+    i = args.index(name)
+    if i + 1 >= len(args) or args[i + 1].startswith("--"):
+        raise SystemExit(f"{name} needs a value, for example {name} " + ("data/generated/my_batch.csv" if name == "--questions" else "42"))
+    return args[i + 1], args[:i] + args[i + 2:]
+
+
+def parse_question_options(args: list) -> dict:
+    """Take the options that decide where the questions come from out of the argument list.
+    Returns a dictionary: fresh (make new questions first), questions_path, seed, seed_given, generator_model and rest (the
+    arguments left for parse_cli_args). Contradictory combinations stop with a plain message."""
+    questions_path, rest = _pop_option(args, "--questions")
+    seed_text, rest = _pop_option(rest, "--seed")
+    generator_model, rest = _pop_option(rest, "--generator-model")
+    label_model, rest = _pop_option(rest, "--label-model")
+    label_method, rest = _pop_option(rest, "--label-method")
+    try:
+        seed = int(seed_text) if seed_text is not None else SEED
+    except ValueError:
+        raise SystemExit(f"--seed needs a whole number, not '{seed_text}'")
+    explicit_fresh, pool_flag = "--fresh" in rest, "--pool" in rest
+    if explicit_fresh and pool_flag:
+        raise SystemExit("--fresh and --pool contradict each other: --fresh makes new questions, --pool uses the built-in pool.")
+    if explicit_fresh and questions_path:
+        raise SystemExit("--fresh and --questions cannot be used together: --fresh makes its own questions, --questions reads a file.")
+    fresh = explicit_fresh or (FRESH_BY_DEFAULT and not pool_flag and questions_path is None)
+    if generator_model and not fresh:
+        raise SystemExit("--generator-model only applies together with --fresh.")
+    if label_model and not fresh:
+        raise SystemExit("--label-model only applies together with --fresh.")
+    if label_method and not fresh:
+        raise SystemExit("--label-method only applies together with --fresh.")
+    if label_method:
+        from .label_judge import METHODS
+        if label_method not in METHODS:
+            raise SystemExit(f"--label-method must be one of: {', '.join(METHODS)}")
+    rest = [a for a in rest if a not in ("--fresh", "--pool")]
+    return {"fresh": fresh, "questions_path": questions_path, "seed": seed, "seed_given": seed_text is not None,
+            "generator_model": generator_model, "label_model": label_model, "label_method": label_method, "rest": rest}
+
+
+def make_fresh_sample(n: int, seed, seed_given: bool, model=None, label_model=None, label_method=None) -> pd.DataFrame:
+    """Make n fresh questions with the separate generator model, replace the previous batch with them, and return them as
+    the sample for the run. The generator is unloaded from memory afterwards, so it does not compete with the two helpers."""
+    from .question_generator import (CURRENT_BATCH_PATH, DEFAULT_LABEL_METHOD, GENERATOR_MODEL, check_model_available, confusion_lines,
+                                     make_fresh_batch)
+    model = model or GENERATOR_MODEL
+    try:
+        for needed in [model] + ([label_model] if label_model else []):
+            check_model_available(needed)
+    except RuntimeError as e:
+        raise SystemExit(str(e))
+    print(f"Fresh questions: asking {model} for {n} new customer questions. This takes a few minutes, and the questions "
+          f"are checked for repeats and for the right request type.")
+    try:
+        df, stats, batch_seed, replaced = make_fresh_batch(
+            n, seed if seed_given else None, model, label_model=label_model, label_method=label_method or DEFAULT_LABEL_METHOD,
+            progress=lambda done, total, attempts: print(f"  {done}/{total} accepted after {attempts} attempts") if done % 10 == 0 or done == total else None)
+    except RuntimeError as e:
+        raise SystemExit(str(e))
+    finally:
+        unload_models([model] + ([label_model] if label_model and label_model != model else []))
+    print(f"Accepted {stats['accepted']} of {n} from {stats['attempts']} attempts"
+          + (f"; rejected: {', '.join(f'{k} {v}' for k, v in sorted(stats['rejected'].items()))}" if stats["rejected"] else "")
+          + (". The previous batch was deleted and replaced." if replaced else ". There was no previous batch."))
+    if stats["label_checked"]:
+        print(f"Label check ({label_model or model}): {1 - stats['label_failed'] / stats['label_checked']:.0%} of the candidates expressed their intended request type.")
+        for line in confusion_lines(stats, 3):
+            print("  common mix-up: " + line)
+    if stats.get("unfilled"):
+        print(f"Unfilled: {sum(stats['unfilled'].values())} of {n} slots could not be produced by the generator ("
+              + ", ".join(f"{k} x{v}" for k, v in sorted(stats["unfilled"].items(), key=lambda kv: -kv[1]))
+              + f"), so this run has {len(df)} questions and keeps the pool's mix for the rest.")
+    sample = load_question_file(CURRENT_BATCH_PATH, n, batch_seed)
+    sample["question_source"] = f"generated:{model}:seed{batch_seed}"
+    return sample
+
+
 def main(argv=None) -> None:
     """Command-line entry point: parse the options, say which router, cache and quality scoring are on,
     and run the pipeline on a random sample of the synthetic questions.
     """
-    raw_args = sys.argv[1:] if argv is None else argv
+    opts = parse_question_options(sys.argv[1:] if argv is None else argv)
+    raw_args, questions_path, seed = opts["rest"], opts["questions_path"], opts["seed"]
     n, score_quality, local_judge_model, use_semantic_cache, use_learned_router = parse_cli_args(raw_args)
+    # Get the questions now, so a missing file, a stopped Ollama or a failed generation ends the run before the helpers are loaded
+    # or any Claude money is spent.
+    if opts["fresh"]:
+        sample = make_fresh_sample(n, seed, opts["seed_given"], opts["generator_model"], opts["label_model"], opts["label_method"])
+        from .question_generator import GENERATOR_MODEL
+        where = f"freshly generated by {opts['generator_model'] or GENERATOR_MODEL}"
+    else:
+        sample = load_question_file(questions_path, n, seed) if questions_path else load_random_sample(n, seed)
+        where = f"drawn at random from {questions_path}" if questions_path else "drawn at random from the built-in synthetic pool"
+    if len(sample) < n:
+        print(f"Note: only {len(sample)} questions are available, so the run will use {len(sample)} and not {n}.")
+    n = len(sample)
+    print(f"Questions: {n} {where}" + (f" (seed {seed})." if seed is not None else " (a different draw every run; pass --seed N to repeat one)."))
     global REDACT_PII
     REDACT_PII = "--no-redact" not in raw_args
     if REDACT_PII:
@@ -781,7 +918,7 @@ def main(argv=None) -> None:
               "run scripts/backfill_quality_scores.py to fill them in later.")
     if local_judge_model:
         print(f"Local quality first-pass is ON via {local_judge_model}: cheap/free, but not the numbers to report -- see section 13 of the user manual.")
-    run_pipeline(load_random_sample(n), score_quality=score_quality, score_quality_local=local_judge_model,
+    run_pipeline(sample, score_quality=score_quality, score_quality_local=local_judge_model,
                  use_semantic_cache=use_semantic_cache, use_learned_router=use_learned_router)
 
 

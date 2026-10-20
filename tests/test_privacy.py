@@ -56,6 +56,33 @@ def test_card_last4_keeps_the_cue_words_and_drops_the_digits():
     assert redact("last four digits are 1234").text == "last four digits are [CARD_LAST4]"
 
 
+@pytest.mark.parametrize("text,kept", [
+    ("my international transfer from my card 6775 is on hold", "card [CARD_LAST4]"),
+    ("the card number 0361 was never activated", "card number [CARD_LAST4]"),
+    ("card no. 1234 was declined", "card no. [CARD_LAST4]"),
+    ("my card #4321 is blocked", "card #[CARD_LAST4]"),
+    ("my Mastercard 5555 was charged twice", "Mastercard [CARD_LAST4]"),
+    ("what is wrong with card ending 123456", "ending [CARD_LAST4]"),
+    ("my card number is 7788 and it is lost", "card number is [CARD_LAST4]"),
+])
+def test_card_digits_are_found_whether_or_not_the_word_ending_is_used(text, kept):
+    r = redact(text)
+    assert kept in r.text and r.findings == {"CARD_LAST4": 1}
+    assert redact(r.text).text == r.text  # and filtering again changes nothing
+
+
+@pytest.mark.parametrize("clean", ["My card expires in 2027.", "I renewed my card in 2026.", "Card payments of 2500 rupees went through.",
+                                   "I have 3 cards with you.", "The 2024 card offer ended.", "my card was declined at 10 shops"])
+def test_years_counts_and_amounts_near_the_word_card_are_left_alone(clean):
+    assert redact(clean).text == clean
+
+
+def test_the_known_limits_of_the_card_digit_rule_are_pinned_down():
+    """Documents two limits. If the rule changes, change this test and the notes in src/privacy.py together."""
+    assert redact("my Visa 4421 was charged").text == "my Visa 4421 was charged"          # Visa is also a travel document
+    assert redact("renew card 2026 please").text == "renew card [CARD_LAST4] please"      # a year straight after "card"
+
+
 def test_account_number_long_and_after_the_word_account():
     assert "[ACCOUNT_NUMBER]" in redact("account 12345678 please").text
     assert redact("account number is 123456").text == "account number is [ACCOUNT_NUMBER]"

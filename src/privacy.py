@@ -13,8 +13,12 @@ What it catches: structured identifiers that follow a recognisable pattern.
     EMAIL, CARD_NUMBER (checked with the Luhn test), IBAN (checked with the mod-97 test), PHONE, SORT_CODE,
     NATIONAL_ID (US SSN, UK National Insurance number, Indian PAN, Aadhaar-style 4-4-4 numbers),
     ACCOUNT_NUMBER (8 to 18 digits in a row, or a short number after the word "account"),
-    CARD_LAST4 (the four digits after "ending" or "last four digits"), DATE_OF_BIRTH (a date after "born" or
+    CARD_LAST4 (four to six digits after "ending" or "last four digits", or straight after the word card, card number, Mastercard,
+    Amex or RuPay: "card 0577", "card number 0361", "card ending 123456"), DATE_OF_BIRTH (a date after "born" or
     "date of birth"), POSTCODE (UK format) and NAME (only after "my name is" or a title such as Mr or Dr).
+
+Known limits of the card-digit rule: it needs one of those cue words, so "Visa 4421" is not caught (Visa is also a travel document, so it
+is deliberately left out), and a year written straight after the word card ("card 2026") would be replaced by mistake.
 
 What it does NOT catch, and the project says so plainly: names and addresses written in free text without
 those cues ("I'm Rahul"), street addresses, employer names, and any identifier in a format not listed above.
@@ -36,7 +40,7 @@ filtering already-filtered text changes nothing. FILTER_VERSION is logged on eve
 import re
 from dataclasses import dataclass, field
 
-FILTER_VERSION = "regex-v2"
+FILTER_VERSION = "regex-v3"
 
 # The identifier types that identify a customer. These are the ones applied to an ANSWER (see the docstring).
 ANSWER_TYPES = frozenset({"CARD_NUMBER", "CARD_LAST4", "ACCOUNT_NUMBER", "NATIONAL_ID", "IBAN", "SORT_CODE",
@@ -101,7 +105,8 @@ _PHONE_US = re.compile(r"(?<!\d)\(?\d{3}\)?[ \-.]\d{3}[ \-.]\d{4}(?!\d)")
 _PHONE_NAT = re.compile(r"(?<!\d)(?:0\d{9,10}|[6-9]\d{9})(?!\d)")
 _ACCT_LONG = re.compile(r"(?<!\d)\d{8,18}(?!\d)")
 _ACCT_CTX = re.compile(r"(?i)\b((?:account|acct|a/c)(?:\s+(?:number|no\.?|#))?\s*(?:is|:|#)?\s*)\d{4,7}\b")
-_LAST4 = re.compile(r"(?i)\b((?:ending(?:\s+(?:in|with))?|last\s+(?:4|four)(?:\s+digits)?(?:\s+(?:are|of))?)\s*[:#]?\s*)\d{4}\b")
+_LAST4 = re.compile(r"(?i)\b((?:ending(?:\s+(?:in|with))?|last\s+(?:4|four)(?:\s+digits)?(?:\s+(?:are|of))?)\s*[:#]?\s*)\d{4,6}\b")
+_CARD_BARE = re.compile(r"(?i)\b((?:card|mastercard|amex|rupay)(?:\s+(?:number|no\.?|num)(?:\s+is)?)?\s*[:#]?\s*)\d{4,6}\b")
 _POSTCODE = re.compile(r"\b[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2}\b")
 _NAME_CUE = re.compile(r"\b((?:[Mm]y name is|[Nn]ame is|[Nn]ame:|[Ii] am called)\s+)[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}")
 _NAME_TITLE = re.compile(r"\b(?:Mr|Mrs|Ms|Miss|Dr|Prof)\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?")
@@ -167,6 +172,7 @@ def redact(text, only=None, known=None) -> RedactionResult:
     t = _sub(_ACCT_LONG, t, "ACCOUNT_NUMBER", **kw)
     t = _sub(_ACCT_CTX, t, "ACCOUNT_NUMBER", keep_group=True, **kw)
     t = _sub(_LAST4, t, "CARD_LAST4", keep_group=True, **kw)
+    t = _sub(_CARD_BARE, t, "CARD_LAST4", keep_group=True, **kw)
     t = _sub(_POSTCODE, t, "POSTCODE", **kw)
     t = _sub(_NAME_CUE, t, "NAME", keep_group=True, **kw)
     t = _sub(_NAME_TITLE, t, "NAME", **kw)
